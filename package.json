@@ -1,0 +1,37 @@
+{
+  "name": "gmail-multi-inbox-mcp",
+  "version": "1.0.0",
+  "description": "Multi-inbox Gmail MCP server with built-in OAuth onboarding",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "gmail-multi-inbox-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "mcp",
+    "gmail",
+    "multi-inbox",
+    "oauth",
+    "model-context-protocol"
+  ],
+  "author": "Tyler Szakacs",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "typescript": "^5.7.3"
+  }
+}
