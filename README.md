@@ -1,52 +1,125 @@
-# Gmail Multi-Inbox MCP
+# Gmail Multi-Inbox MCP Server
 
-A brand-new MCP server for Gmail that supports multiple inboxes in one server.
+> A powerful Model Context Protocol (MCP) server that enables AI assistants to manage multiple Gmail accounts simultaneously with built-in OAuth authentication.
 
-- Read/search can aggregate across all enabled accounts.
-- Send/draft/admin actions require an explicit `account` value.
-- OAuth onboarding is built in via MCP tools.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
 
-## Features
+## 🌟 Why This MCP Server?
 
-### Read and search
-- `list_accounts`
-- `read_emails`
-- `search_emails`
-- `get_email_thread`
-- `get_labels`
+Unlike existing Gmail MCP servers, this implementation offers:
 
-### Write and admin
-- `send_email`
-- `create_draft`
-- `mark_as_read`
-- `add_labels`
-- `remove_labels`
-- `archive_emails`
-- `trash_emails`
-- `create_label`
-- `delete_label`
+- **Multi-Account Support**: Manage multiple Gmail accounts from a single MCP server instance
+- **Intelligent Aggregation**: Read and search across all accounts simultaneously
+- **Built-in OAuth Flow**: Complete authentication setup through MCP tools - no manual token generation
+- **Type-Safe**: Built with TypeScript for reliability and better IDE support
+- **Auto Token Refresh**: Handles token expiration automatically and saves refreshed tokens
+- **Comprehensive API**: Full Gmail API coverage including labels, threads, drafts, and more
 
-### Account onboarding
-- `begin_account_auth`
-- `finish_account_auth`
+## 📋 Table of Contents
 
-## Requirements
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
+- [Installation](#-installation)
+- [Google Cloud Setup](#-google-cloud-setup)
+- [Configuration](#-configuration)
+- [OAuth Onboarding](#-oauth-onboarding)
+- [Usage Examples](#-usage-examples)
+- [API Reference](#-api-reference)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-- Node.js 20+
-- A Google Cloud OAuth client with Gmail API enabled
+## ✨ Features
 
-## Install and Build
+### Read Operations
+- **`list_accounts`** - View all configured accounts and their status
+- **`read_emails`** - Fetch recent emails (aggregates across all accounts by default)
+- **`search_emails`** - Search using Gmail query syntax across multiple accounts
+- **`get_email_thread`** - Retrieve complete conversation threads
+- **`get_labels`** - List all labels for an account
+
+### Write Operations
+- **`send_email`** - Send emails from any configured account
+- **`create_draft`** - Create draft messages
+- **`mark_as_read`** - Mark messages as read
+- **`archive_emails`** - Archive messages (remove from inbox)
+- **`trash_emails`** - Move messages to trash
+
+### Label Management
+- **`add_labels`** - Apply labels to messages
+- **`remove_labels`** - Remove labels from messages
+- **`create_label`** - Create new custom labels
+- **`delete_label`** - Delete existing labels
+
+### Account Management
+- **`begin_account_auth`** - Start OAuth flow for new account
+- **`finish_account_auth`** - Complete OAuth and save credentials
+
+## 🔧 Prerequisites
+
+- **Node.js 20+** ([Download](https://nodejs.org/))
+- **A Google Cloud Project** with Gmail API enabled
+- **OAuth 2.0 Credentials** (Desktop application type)
+
+## 📦 Installation
 
 ```bash
+# Clone the repository
 git clone https://github.com/tszaks/gmail-multi-inbox-mcp.git
 cd gmail-multi-inbox-mcp
+
+# Install dependencies
 npm install
+
+# Build the TypeScript code
 npm run build
 ```
 
-## MCP Config
+## ☁️ Google Cloud Setup
 
-Add to your global `.mcp.json` (adjust path to your installation):
+Before using this MCP server, you need to set up a Google Cloud project:
+
+### 1. Create a Google Cloud Project
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Note your project ID
+
+### 2. Enable Gmail API
+
+1. In your project, go to **APIs & Services** > **Library**
+2. Search for "Gmail API"
+3. Click **Enable**
+
+### 3. Create OAuth 2.0 Credentials
+
+1. Go to **APIs & Services** > **Credentials**
+2. Click **+ CREATE CREDENTIALS** > **OAuth client ID**
+3. If prompted, configure the OAuth consent screen:
+   - Choose "External" user type
+   - Fill in required fields (app name, support email)
+   - Add your email to test users
+4. For application type, select **Desktop app**
+5. Give it a name (e.g., "Gmail MCP Client")
+6. Click **Create**
+7. **Download the JSON file** - you'll need this for authentication
+
+### 4. OAuth Consent Screen Setup
+
+1. Go to **APIs & Services** > **OAuth consent screen**
+2. Add the following scopes:
+   - `https://www.googleapis.com/auth/gmail.modify`
+   - `https://www.googleapis.com/auth/gmail.send`
+   - `https://www.googleapis.com/auth/userinfo.email`
+3. Add your Gmail address(es) as test users
+
+## ⚙️ Configuration
+
+### Add to Your MCP Settings
+
+Add this server to your `.mcp.json` configuration file (adjust path to match your installation):
 
 ```json
 {
@@ -61,7 +134,9 @@ Add to your global `.mcp.json` (adjust path to your installation):
 }
 ```
 
-Optional environment override:
+### Custom Config Directory (Optional)
+
+To use a custom directory for storing account data:
 
 ```json
 {
@@ -79,25 +154,25 @@ Optional environment override:
 }
 ```
 
-## Config Layout
+### Directory Structure
 
-Default root: `~/.gmail-multi-mcp`
+Default configuration location: `~/.gmail-multi-mcp/`
 
 ```
 ~/.gmail-multi-mcp/
-  accounts.json
-  accounts/
-    personal/
-      credentials.json
-      token.json
-      meta.json
-    business/
-      credentials.json
-      token.json
-      meta.json
+├── accounts.json           # Master account list
+└── accounts/
+    ├── personal/
+    │   ├── credentials.json  # OAuth client credentials
+    │   ├── token.json       # Access/refresh tokens
+    │   └── meta.json        # Account metadata
+    └── work/
+        ├── credentials.json
+        ├── token.json
+        └── meta.json
 ```
 
-### `accounts.json` example
+### accounts.json Format
 
 ```json
 {
@@ -105,52 +180,365 @@ Default root: `~/.gmail-multi-mcp`
   "accounts": [
     {
       "id": "personal",
-      "email": "your-email@gmail.com",
-      "displayName": "Personal",
+      "email": "user@gmail.com",
+      "displayName": "Personal Gmail",
       "enabled": true,
       "credentialPath": "~/.gmail-multi-mcp/accounts/personal/credentials.json",
       "tokenPath": "~/.gmail-multi-mcp/accounts/personal/token.json"
+    },
+    {
+      "id": "work",
+      "email": "user@company.com",
+      "displayName": "Work Email",
+      "enabled": true,
+      "credentialPath": "~/.gmail-multi-mcp/accounts/work/credentials.json",
+      "tokenPath": "~/.gmail-multi-mcp/accounts/work/token.json"
     }
   ]
 }
 ```
 
-## OAuth Onboarding Flow
+## 🔐 OAuth Onboarding
 
-### 1) Start account auth
+Authenticate accounts directly through MCP tools:
 
-Call `begin_account_auth` with:
-- `account_id`
-- `email`
-- one of:
-  - `credentials_json` (JSON object or JSON string)
-  - `credentials_path`
+### Step 1: Start Authentication
 
-The tool returns a Google OAuth URL.
+Call the `begin_account_auth` tool with your OAuth credentials:
 
-### 2) Finish account auth
+```typescript
+{
+  "account_id": "personal",
+  "email": "user@gmail.com",
+  "credentials_json": {
+    "installed": {
+      "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+      "client_secret": "YOUR_CLIENT_SECRET",
+      "redirect_uris": ["http://localhost"]
+    }
+  }
+}
+```
 
-Call `finish_account_auth` with:
-- `account_id`
-- `authorization_code`
+Or use a file path:
 
-This stores `token.json`, enables the account, and validates profile access.
+```typescript
+{
+  "account_id": "personal",
+  "email": "user@gmail.com",
+  "credentials_path": "/path/to/credentials.json"
+}
+```
 
-## Behavior Rules
+The tool returns a Google OAuth URL. Open this URL in your browser.
 
-- `read_emails` and `search_emails`:
-  - if `account` is omitted, server aggregates across all enabled accounts
-  - partial account failures are reported in `Account Errors`
-- Write/admin tools:
-  - always require explicit `account`
+### Step 2: Complete Authentication
 
-## Scripts
+1. In your browser, sign in with the Gmail account
+2. Grant the requested permissions
+3. Google redirects you to a localhost URL with a `code` parameter
+4. Copy the authorization code from the URL
 
-- `npm run build` compile TypeScript to `dist/`
-- `npm run typecheck` run strict type check
-- `npm run start` run server from `dist/index.js`
+Call `finish_account_auth`:
 
-## Notes
+```typescript
+{
+  "account_id": "personal",
+  "authorization_code": "4/0AfJoh..."
+}
+```
 
-- This server does not reuse existing Gmail MCP code.
-- Tokens are refreshed automatically and saved back to each account `token.json`.
+Your account is now authenticated and ready to use!
+
+## 💡 Usage Examples
+
+### Example 1: Read Recent Emails from All Accounts
+
+```typescript
+// Aggregates across all enabled accounts
+{
+  "max_results": 20,
+  "include_body": true
+}
+
+// Returns emails with source account indicated
+```
+
+### Example 2: Search Across Multiple Accounts
+
+```typescript
+{
+  "query": "from:boss@company.com is:unread",
+  "max_results": 10
+}
+
+// Searches all enabled accounts, merges and sorts results
+```
+
+### Example 3: Send Email from Specific Account
+
+```typescript
+{
+  "account": "work",
+  "to": "colleague@company.com",
+  "subject": "Project Update",
+  "body": "Here's the latest on the project...",
+  "html": false
+}
+```
+
+### Example 4: Read Only from One Account
+
+```typescript
+{
+  "account": "personal",
+  "max_results": 10,
+  "query": "label:important"
+}
+```
+
+### Example 5: Manage Labels
+
+```typescript
+// Create a new label
+{
+  "account": "personal",
+  "name": "Urgent-2026"
+}
+
+// Add label to messages
+{
+  "account": "personal",
+  "message_ids": ["msg123", "msg456"],
+  "label_ids": ["Label_789"]
+}
+```
+
+## 📚 API Reference
+
+### Read Operations
+
+#### `list_accounts`
+Returns all configured accounts with health status.
+
+**Parameters:** None
+
+**Returns:**
+```typescript
+{
+  accounts: Array<{
+    id: string
+    email: string
+    displayName: string
+    enabled: boolean
+    hasValidToken: boolean
+  }>
+}
+```
+
+#### `read_emails`
+Fetch recent emails with optional filtering.
+
+**Parameters:**
+- `account` (optional): Account ID to read from. Omit to aggregate all accounts.
+- `max_results` (optional, default: 20): Number of emails to return (1-100)
+- `query` (optional): Gmail search query
+- `include_body` (optional, default: false): Include plaintext body extraction
+
+**Returns:** Array of email objects with metadata, headers, and optional body
+
+#### `search_emails`
+Search emails using Gmail query syntax.
+
+**Parameters:**
+- `query` (required): Gmail search query
+- `account` (optional): Account ID to search. Omit to search all accounts.
+- `max_results` (optional, default: 25): Maximum results (1-100)
+
+**Returns:** Array of matching emails
+
+#### `get_email_thread`
+Retrieve a complete email thread.
+
+**Parameters:**
+- `account` (required): Account ID
+- `thread_id` (required): Gmail thread ID
+
+**Returns:** Thread object with all messages
+
+#### `get_labels`
+List all labels for an account.
+
+**Parameters:**
+- `account` (required): Account ID
+
+**Returns:** Array of label objects with IDs and names
+
+### Write Operations
+
+#### `send_email`
+Send an email from a specific account.
+
+**Parameters:**
+- `account` (required): Account ID
+- `to` (required): Recipient email address(es)
+- `subject` (required): Email subject
+- `body` (required): Email body
+- `cc` (optional): CC recipients
+- `bcc` (optional): BCC recipients
+- `html` (optional, default: false): Send as HTML
+
+**Returns:** Sent message details
+
+#### `create_draft`
+Create a draft email.
+
+**Parameters:** Same as `send_email`
+
+**Returns:** Draft details
+
+#### `mark_as_read`
+Mark messages as read.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_ids` (required): Array of message IDs
+
+#### `archive_emails`
+Archive messages (remove INBOX label).
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_ids` (required): Array of message IDs
+
+#### `trash_emails`
+Move messages to trash.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_ids` (required): Array of message IDs
+
+### Label Operations
+
+#### `add_labels`
+Add labels to messages.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_ids` (required): Array of message IDs
+- `label_ids` (required): Array of label IDs
+
+#### `remove_labels`
+Remove labels from messages.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_ids` (required): Array of message IDs
+- `label_ids` (required): Array of label IDs
+
+#### `create_label`
+Create a new Gmail label.
+
+**Parameters:**
+- `account` (required): Account ID
+- `name` (required): Label name
+- `label_list_visibility` (optional, default: "labelShow")
+- `message_list_visibility` (optional, default: "show")
+
+#### `delete_label`
+Delete a Gmail label.
+
+**Parameters:**
+- `account` (required): Account ID
+- `label_id` (required): Label ID to delete
+
+## 🐛 Troubleshooting
+
+### "Invalid grant" Error
+
+This usually means your authorization code has expired. Authorization codes are single-use and expire after a few minutes.
+
+**Solution:** Run `begin_account_auth` again to get a fresh OAuth URL and authorization code.
+
+### "Token has been expired or revoked"
+
+Your refresh token is no longer valid.
+
+**Solution:**
+1. Delete the `token.json` file for the affected account
+2. Run the OAuth flow again (`begin_account_auth` → `finish_account_auth`)
+
+### "Insufficient permissions"
+
+The OAuth token doesn't have the required scopes.
+
+**Solution:**
+1. Check your Google Cloud OAuth consent screen has all required scopes
+2. Re-run the OAuth flow to grant new permissions
+3. Required scopes:
+   - `https://www.googleapis.com/auth/gmail.modify`
+   - `https://www.googleapis.com/auth/gmail.send`
+   - `https://www.googleapis.com/auth/userinfo.email`
+
+### Account Not Found
+
+The specified account ID doesn't exist in `accounts.json`.
+
+**Solution:**
+1. Run `list_accounts` to see available accounts
+2. Ensure you completed OAuth onboarding for the account
+3. Check that the account is `enabled: true` in `accounts.json`
+
+### Rate Limiting
+
+Gmail API has rate limits (daily quota and per-user quotas).
+
+**Solution:**
+1. Check your quota at [Google Cloud Console](https://console.cloud.google.com/apis/api/gmail.googleapis.com/quotas)
+2. Implement exponential backoff in your application
+3. Consider applying for increased quota if needed
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how you can help:
+
+1. **Fork the repository**
+2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
+3. **Commit your changes** (`git commit -m 'Add amazing feature'`)
+4. **Push to the branch** (`git push origin feature/amazing-feature`)
+5. **Open a Pull Request**
+
+### Development Scripts
+
+```bash
+# Watch mode for development
+npm run dev
+
+# Type checking
+npm run typecheck
+
+# Build for production
+npm run build
+
+# Run the server
+npm run start
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with the [Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+- Uses [Google APIs Node.js Client](https://github.com/googleapis/google-api-nodejs-client)
+
+## 🔗 Links
+
+- [MCP Documentation](https://modelcontextprotocol.io/)
+- [Gmail API Documentation](https://developers.google.com/gmail/api)
+- [Issues & Bug Reports](https://github.com/tszaks/gmail-multi-inbox-mcp/issues)
+
+---
+
+Made with ❤️ by [Tyler Szakacs](https://github.com/tszaks)
