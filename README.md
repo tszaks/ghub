@@ -542,3 +542,39 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 Made with ❤️ by [Tyler Szakacs](https://github.com/tszaks)
+
+## Quickstart TL;DR
+
+```bash
+npm install
+npm run build
+node dist/index.js
+```
+
+Then add the server to MCP config and onboard each account with `begin_account_auth` + `finish_account_auth`.
+
+## How It Works (TL;DR)
+
+- Server stores account-level credentials/tokens in local config directory
+- OAuth flow is handled via MCP tools
+- Read/search can aggregate across all enabled accounts
+- Gmail API calls execute per selected account
+
+## LLM Quick Copy
+
+Use the copy button on this code block in GitHub.
+
+```txt
+Repo: gmail-multi-inbox-mcp
+Goal: Multi-account Gmail MCP with built-in OAuth onboarding.
+Setup:
+1) npm install && npm run build
+2) Add to MCP config
+3) Run begin_account_auth + finish_account_auth for each inbox
+Use:
+- list_accounts to verify health
+- read_emails/search_emails aggregated or per account
+- send_email/create_draft/label tools for write actions
+How it works:
+- Node MCP server maintains per-account token files and calls Gmail API
+```
