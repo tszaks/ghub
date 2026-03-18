@@ -77,6 +77,11 @@ interface CreateLabelArgs {
   message_list_visibility?: string;
 }
 
+interface DeleteDraftsArgs {
+  account: string;
+  draft_ids: string[];
+}
+
 interface OutgoingEmailArgs {
   account: string;
   to: string;
@@ -470,6 +475,23 @@ class GmailMultiInboxServer {
           },
         },
         {
+          name: 'delete_drafts',
+          description: 'Permanently delete one or more drafts in one account (account required). Draft IDs are returned by create_draft.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              draft_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Draft IDs to delete (as returned by create_draft).',
+              },
+            },
+            required: ['account', 'draft_ids'],
+            additionalProperties: false,
+          },
+        },
+        {
           name: 'send_email',
           description: 'Send an email from one account (account required).',
           inputSchema: {
@@ -577,6 +599,8 @@ class GmailMultiInboxServer {
             return await this.handleDeleteLabel(args);
           case 'create_draft':
             return await this.handleCreateDraft(args);
+          case 'delete_drafts':
+            return await this.handleDeleteDrafts(args);
           case 'send_email':
             return await this.handleSendEmail(args);
           case 'begin_account_auth':
@@ -951,6 +975,20 @@ class GmailMultiInboxServer {
         `Thread ID: ${result.threadId || '(unknown)'}`,
       ].join('\n')
     );
+  }
+
+  private async handleDeleteDrafts(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const args: DeleteDraftsArgs = {
+      account: valueToString(rawArgs.account),
+      draft_ids: valueToStringArray(rawArgs.draft_ids),
+    };
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+    const deleted = await client.deleteDrafts(args.draft_ids);
+
+    return textResult(`✅ Deleted ${deleted} draft(s) in account ${account.id}.`);
   }
 
   private async handleSendEmail(rawArgs: Record<string, unknown>): Promise<CallToolResult> {

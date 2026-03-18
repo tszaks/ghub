@@ -486,6 +486,22 @@ export class GmailAccountClient {
     };
   }
 
+  async deleteDrafts(draftIds: string[]): Promise<number> {
+    const ids = draftIds.map((id) => id.trim()).filter(Boolean);
+    if (ids.length === 0) throw new Error('draft_ids must include at least one value.');
+
+    await Promise.all(
+      ids.map((draftId) =>
+        this.gmail.users.drafts.delete({
+          userId: 'me',
+          id: draftId,
+        })
+      )
+    );
+
+    return ids.length;
+  }
+
   async sendEmail(input: {
     to: string;
     subject: string;
