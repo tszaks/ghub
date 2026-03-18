@@ -1,12 +1,12 @@
 # Gmail Multi-Inbox MCP Server
 
-> A powerful Model Context Protocol (MCP) server that enables AI assistants to manage multiple Gmail accounts simultaneously with built-in OAuth authentication.
+> A Model Context Protocol (MCP) server that enables AI assistants to manage multiple Gmail accounts simultaneously with built-in OAuth authentication.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
 
-## 🌟 Why This MCP Server?
+## Why This MCP Server?
 
 Unlike existing Gmail MCP servers, this implementation offers:
 
@@ -17,21 +17,21 @@ Unlike existing Gmail MCP servers, this implementation offers:
 - **Auto Token Refresh**: Handles token expiration automatically and saves refreshed tokens
 - **Comprehensive API**: Full Gmail API coverage including labels, threads, drafts, and more
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Features](#-features)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Google Cloud Setup](#-google-cloud-setup)
-- [Configuration](#-configuration)
-- [OAuth Onboarding](#-oauth-onboarding)
-- [Usage Examples](#-usage-examples)
-- [API Reference](#-api-reference)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Google Cloud Setup](#google-cloud-setup)
+- [Configuration](#configuration)
+- [OAuth Onboarding](#oauth-onboarding)
+- [Usage Examples](#usage-examples)
+- [API Reference](#api-reference)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-## ✨ Features
+## Features
 
 ### Read Operations
 - **`list_accounts`** - View all configured accounts and their status
@@ -43,6 +43,7 @@ Unlike existing Gmail MCP servers, this implementation offers:
 ### Write Operations
 - **`send_email`** - Send emails from any configured account
 - **`create_draft`** - Create draft messages
+- **`delete_drafts`** - Permanently delete one or more drafts by draft ID
 - **`mark_as_read`** - Mark messages as read
 - **`archive_emails`** - Archive messages (remove from inbox)
 - **`trash_emails`** - Move messages to trash
@@ -57,13 +58,13 @@ Unlike existing Gmail MCP servers, this implementation offers:
 - **`begin_account_auth`** - Start OAuth flow for new account
 - **`finish_account_auth`** - Complete OAuth and save credentials
 
-## 🔧 Prerequisites
+## Prerequisites
 
 - **Node.js 20+** ([Download](https://nodejs.org/))
 - **A Google Cloud Project** with Gmail API enabled
 - **OAuth 2.0 Credentials** (Desktop application type)
 
-## 📦 Installation
+## Installation
 
 ```bash
 # Clone the repository
@@ -77,7 +78,7 @@ npm install
 npm run build
 ```
 
-## ☁️ Google Cloud Setup
+## Google Cloud Setup
 
 Before using this MCP server, you need to set up a Google Cloud project:
 
@@ -115,7 +116,7 @@ Before using this MCP server, you need to set up a Google Cloud project:
    - `https://www.googleapis.com/auth/userinfo.email`
 3. Add your Gmail address(es) as test users
 
-## ⚙️ Configuration
+## Configuration
 
 ### Add to Your MCP Settings
 
@@ -198,7 +199,7 @@ Default configuration location: `~/.gmail-multi-mcp/`
 }
 ```
 
-## 🔐 OAuth Onboarding
+## OAuth Onboarding
 
 Authenticate accounts directly through MCP tools:
 
@@ -248,9 +249,9 @@ Call `finish_account_auth`:
 }
 ```
 
-Your account is now authenticated and ready to use!
+Your account is now authenticated and ready to use.
 
-## 💡 Usage Examples
+## Usage Examples
 
 ### Example 1: Read Recent Emails from All Accounts
 
@@ -314,7 +315,17 @@ Your account is now authenticated and ready to use!
 }
 ```
 
-## 📚 API Reference
+### Example 6: Delete Drafts
+
+```typescript
+// Delete one or more drafts by their draft IDs (returned by create_draft)
+{
+  "account": "personal",
+  "draft_ids": ["r5457071851533655344", "r774137312565667821"]
+}
+```
+
+## API Reference
 
 ### Read Operations
 
@@ -395,7 +406,16 @@ Create a draft email.
 
 **Parameters:** Same as `send_email`
 
-**Returns:** Draft details
+**Returns:** Draft details including `draft_id` and `thread_id`
+
+#### `delete_drafts`
+Permanently delete one or more drafts. Uses draft IDs as returned by `create_draft`. Note: draft IDs differ from message IDs and cannot be used with `trash_emails`.
+
+**Parameters:**
+- `account` (required): Account ID
+- `draft_ids` (required): Array of draft IDs to delete
+
+**Returns:** Count of deleted drafts
 
 #### `mark_as_read`
 Mark messages as read.
@@ -452,7 +472,7 @@ Delete a Gmail label.
 - `account` (required): Account ID
 - `label_id` (required): Label ID to delete
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### "Invalid grant" Error
 
@@ -466,7 +486,7 @@ Your refresh token is no longer valid.
 
 **Solution:**
 1. Delete the `token.json` file for the affected account
-2. Run the OAuth flow again (`begin_account_auth` → `finish_account_auth`)
+2. Run the OAuth flow again (`begin_account_auth` then `finish_account_auth`)
 
 ### "Insufficient permissions"
 
@@ -498,15 +518,15 @@ Gmail API has rate limits (daily quota and per-user quotas).
 2. Implement exponential backoff in your application
 3. Consider applying for increased quota if needed
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Here's how you can help:
+Contributions are welcome. Here's how:
 
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Commit your changes** (`git commit -m 'Add amazing feature'`)
-4. **Push to the branch** (`git push origin feature/amazing-feature`)
-5. **Open a Pull Request**
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m 'Add your feature'`)
+4. Push to the branch (`git push origin feature/your-feature`)
+5. Open a Pull Request
 
 ### Development Scripts
 
@@ -524,16 +544,16 @@ npm run build
 npm run start
 ```
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with the [Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 - Uses [Google APIs Node.js Client](https://github.com/googleapis/google-api-nodejs-client)
 
-## 🔗 Links
+## Links
 
 - [MCP Documentation](https://modelcontextprotocol.io/)
 - [Gmail API Documentation](https://developers.google.com/gmail/api)
@@ -541,7 +561,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-Made with ❤️ by [Tyler Szakacs](https://github.com/tszaks)
+Built by [Tyler Szakacs](https://github.com/tszaks)
 
 ## Quickstart TL;DR
 
@@ -574,7 +594,7 @@ Setup:
 Use:
 - list_accounts to verify health
 - read_emails/search_emails aggregated or per account
-- send_email/create_draft/label tools for write actions
+- send_email/create_draft/delete_drafts/label tools for write actions
 How it works:
 - Node MCP server maintains per-account token files and calls Gmail API
 ```
