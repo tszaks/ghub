@@ -1,6 +1,7 @@
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { google, type gmail_v1 } from 'googleapis';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { AccountConfig, type AccountPaths, getAccountPaths } from './config.js';
 
 export const GMAIL_SCOPES = [
@@ -37,6 +38,12 @@ export interface LabelInfo {
 
 interface OAuthClientOptions {
   credentials: unknown;
+}
+
+export interface EmailAttachment {
+  path: string;
+  filename?: string;
+  contentType?: string;
 }
 
 function decodeBase64Url(value: string): string {
@@ -105,24 +112,89 @@ function normalizeOutgoingAddressList(value?: string): string | null {
     .join(', ');
 }
 
-function buildRawEmailMessage(input: {
+function encodeBase64Url(value: string): string {
+  return Buffer.from(value)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function wrapBase64(value: string): string {
+  return value.replace(/.{1,76}/g, '$&\r\n').trimEnd();
+}
+
+function inferContentType(filename: string): string {
+  const extension = path.extname(filename).toLowerCase();
+  switch (extension) {
+    case '.pdf':
+      return 'application/pdf';
+    case '.txt':
+      return 'text/plain';
+    case '.csv':
+      return 'text/csv';
+    case '.json':
+      return 'application/json';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.doc':
+      return 'application/msword';
+    case '.docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n"]/g, ' ').trim();
+}
+
+async function buildRawEmailMessage(input: {
   to: string;
   subject: string;
   body: string;
   cc?: string;
   bcc?: string;
   html?: boolean;
-}): string {
+  attachments?: EmailAttachment[];
+}): Promise<string> {
   const to = normalizeOutgoingAddressList(input.to);
   if (!to) {
     throw new Error('Recipient "to" is required.');
+  }
+
+  const attachments = (input.attachments ?? []).filter((attachment) => attachment.path.trim() !== '');
+
+  if (attachments.length === 0) {
+    const lines: string[] = [
+      `To: ${to}`,
+      `Subject: ${input.subject}`,
+      'MIME-Version: 1.0',
+      `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
+    ];
+
+    const cc = normalizeOutgoingAddressList(input.cc);
+    if (cc) lines.push(`Cc: ${cc}`);
+
+    const bcc = normalizeOutgoingAddressList(input.bcc);
+    if (bcc) lines.push(`Bcc: ${bcc}`);
+
+    lines.push('', input.body);
+    return encodeBase64Url(lines.join('\r\n'));
   }
 
   const lines: string[] = [
     `To: ${to}`,
     `Subject: ${input.subject}`,
     'MIME-Version: 1.0',
-    `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
   ];
 
   const cc = normalizeOutgoingAddressList(input.cc);
@@ -131,13 +203,65 @@ function buildRawEmailMessage(input: {
   const bcc = normalizeOutgoingAddressList(input.bcc);
   if (bcc) lines.push(`Bcc: ${bcc}`);
 
-  lines.push('', input.body);
+  const boundary = `gmail-multi-inbox-mcp-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '');
 
-  return Buffer.from(lines.join('\r\n'))
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
+  lines.push(
+    `--${boundary}`,
+    `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrapBase64(Buffer.from(input.body, 'utf8').toString('base64'))
+  );
+
+  for (const attachment of attachments) {
+    const filePath = attachment.path.trim();
+    const fileBuffer = await fs.readFile(filePath);
+    const filename = sanitizeHeaderValue(
+      attachment.filename?.trim() || path.basename(filePath)
+    );
+    const contentType = attachment.contentType?.trim() || inferContentType(filename);
+
+    lines.push(
+      `--${boundary}`,
+      `Content-Type: ${contentType}; name="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${filename}"`,
+      '',
+      wrapBase64(fileBuffer.toString('base64'))
+    );
+  }
+
+  lines.push(`--${boundary}--`);
+
+  return encodeBase64Url(lines.join('\r\n'));
+}
+
+function normalizeAttachments(attachments?: EmailAttachment[]): EmailAttachment[] {
+  return (attachments ?? [])
+    .map((attachment) => ({
+      path: attachment.path.trim(),
+      filename: attachment.filename?.trim() || undefined,
+      contentType: attachment.contentType?.trim() || undefined,
+    }))
+    .filter((attachment) => attachment.path !== '');
+}
+
+async function createRawEmailMessage(input: {
+  to: string;
+  subject: string;
+  body: string;
+  cc?: string;
+  bcc?: string;
+  html?: boolean;
+  attachments?: EmailAttachment[];
+}): Promise<string> {
+  return buildRawEmailMessage({
+    ...input,
+    attachments: normalizeAttachments(input.attachments),
+  });
 }
 
 export function createOAuthClientFromCredentials(options: OAuthClientOptions): OAuth2Client {
@@ -470,8 +594,9 @@ export class GmailAccountClient {
     cc?: string;
     bcc?: string;
     html?: boolean;
+    attachments?: EmailAttachment[];
   }): Promise<{ draftId: string; threadId?: string }> {
-    const raw = buildRawEmailMessage(input);
+    const raw = await createRawEmailMessage(input);
 
     const response = await this.gmail.users.drafts.create({
       userId: 'me',
@@ -509,8 +634,9 @@ export class GmailAccountClient {
     cc?: string;
     bcc?: string;
     html?: boolean;
+    attachments?: EmailAttachment[];
   }): Promise<{ messageId: string; threadId?: string }> {
-    const raw = buildRawEmailMessage(input);
+    const raw = await createRawEmailMessage(input);
 
     const response = await this.gmail.users.messages.send({
       userId: 'me',

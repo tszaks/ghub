@@ -1,6 +1,6 @@
 {
   "name": "gmail-multi-inbox-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-inbox Gmail MCP server with built-in OAuth onboarding",
   "type": "module",
   "main": "dist/index.js",

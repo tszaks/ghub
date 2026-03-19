@@ -90,6 +90,13 @@ interface OutgoingEmailArgs {
   cc?: string;
   bcc?: string;
   html?: boolean;
+  attachments?: OutgoingEmailAttachmentArgs[];
+}
+
+interface OutgoingEmailAttachmentArgs {
+  path: string;
+  filename?: string;
+  content_type?: string;
 }
 
 interface BeginAuthArgs {
@@ -135,6 +142,25 @@ function valueToNumber(value: unknown, fallback: number): number {
 function valueToStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item)).map((item) => item.trim()).filter(Boolean);
+}
+
+function valueToAttachmentArray(value: unknown): OutgoingEmailAttachmentArgs[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    const filePath = valueToString(candidate.path).trim();
+    if (!filePath) return [];
+
+    return [
+      {
+        path: filePath,
+        filename: valueToString(candidate.filename, '').trim() || undefined,
+        content_type: valueToString(candidate.content_type, '').trim() || undefined,
+      },
+    ];
+  });
 }
 
 function emailDateForSort(email: ParsedEmail): number {
@@ -469,6 +495,26 @@ class GmailMultiInboxServer {
                 description: 'Set true to send body as text/html.',
                 default: false,
               },
+              attachments: {
+                type: 'array',
+                description: 'Optional local file attachments.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    path: { type: 'string', description: 'Absolute or local filesystem path.' },
+                    filename: {
+                      type: 'string',
+                      description: 'Optional override filename shown in Gmail.',
+                    },
+                    content_type: {
+                      type: 'string',
+                      description: 'Optional MIME type override (for example application/pdf).',
+                    },
+                  },
+                  required: ['path'],
+                  additionalProperties: false,
+                },
+              },
             },
             required: ['account', 'to', 'subject', 'body'],
             additionalProperties: false,
@@ -507,6 +553,26 @@ class GmailMultiInboxServer {
                 type: 'boolean',
                 description: 'Set true to send body as text/html.',
                 default: false,
+              },
+              attachments: {
+                type: 'array',
+                description: 'Optional local file attachments.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    path: { type: 'string', description: 'Absolute or local filesystem path.' },
+                    filename: {
+                      type: 'string',
+                      description: 'Optional override filename shown in Gmail.',
+                    },
+                    content_type: {
+                      type: 'string',
+                      description: 'Optional MIME type override (for example application/pdf).',
+                    },
+                  },
+                  required: ['path'],
+                  additionalProperties: false,
+                },
               },
             },
             required: ['account', 'to', 'subject', 'body'],
@@ -952,6 +1018,7 @@ class GmailMultiInboxServer {
       cc: valueToString(rawArgs.cc, '') || undefined,
       bcc: valueToString(rawArgs.bcc, '') || undefined,
       html: valueToBoolean(rawArgs.html, false),
+      attachments: valueToAttachmentArray(rawArgs.attachments),
     };
 
     const config = await this.loadConfig();
@@ -965,6 +1032,11 @@ class GmailMultiInboxServer {
       cc: args.cc,
       bcc: args.bcc,
       html: args.html,
+      attachments: args.attachments?.map((attachment) => ({
+        path: attachment.path,
+        filename: attachment.filename,
+        contentType: attachment.content_type,
+      })),
     });
 
     return textResult(
@@ -973,6 +1045,7 @@ class GmailMultiInboxServer {
         `Account: ${account.id} (${account.email})`,
         `Draft ID: ${result.draftId || '(unknown)'}`,
         `Thread ID: ${result.threadId || '(unknown)'}`,
+        `Attachments: ${args.attachments?.length ?? 0}`,
       ].join('\n')
     );
   }
@@ -1000,6 +1073,7 @@ class GmailMultiInboxServer {
       cc: valueToString(rawArgs.cc, '') || undefined,
       bcc: valueToString(rawArgs.bcc, '') || undefined,
       html: valueToBoolean(rawArgs.html, false),
+      attachments: valueToAttachmentArray(rawArgs.attachments),
     };
 
     const config = await this.loadConfig();
@@ -1013,6 +1087,11 @@ class GmailMultiInboxServer {
       cc: args.cc,
       bcc: args.bcc,
       html: args.html,
+      attachments: args.attachments?.map((attachment) => ({
+        path: attachment.path,
+        filename: attachment.filename,
+        contentType: attachment.content_type,
+      })),
     });
 
     return textResult(
@@ -1021,6 +1100,7 @@ class GmailMultiInboxServer {
         `Account: ${account.id} (${account.email})`,
         `Message ID: ${result.messageId || '(unknown)'}`,
         `Thread ID: ${result.threadId || '(unknown)'}`,
+        `Attachments: ${args.attachments?.length ?? 0}`,
       ].join('\n')
     );
   }
