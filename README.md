@@ -41,8 +41,8 @@ Unlike existing Gmail MCP servers, this implementation offers:
 - **`get_labels`** - List all labels for an account
 
 ### Write Operations
-- **`send_email`** - Send emails from any configured account
-- **`create_draft`** - Create draft messages
+- **`send_email`** - Send emails from any configured account, with optional local file attachments
+- **`create_draft`** - Create draft messages, with optional local file attachments
 - **`delete_drafts`** - Permanently delete one or more drafts by draft ID
 - **`mark_as_read`** - Mark messages as read
 - **`archive_emails`** - Archive messages (remove from inbox)
@@ -398,6 +398,10 @@ Send an email from a specific account.
 - `cc` (optional): CC recipients
 - `bcc` (optional): BCC recipients
 - `html` (optional, default: false): Send as HTML
+- `attachments` (optional): Array of local file attachments. Each item supports:
+  - `path` (required): Absolute or local filesystem path
+  - `filename` (optional): Override the filename shown in Gmail
+  - `content_type` (optional): Override the MIME type, for example `application/pdf`
 
 **Returns:** Sent message details
 
