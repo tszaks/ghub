@@ -31,6 +31,7 @@ import {
   exchangeCodeForToken,
   generateAuthUrlFromCredentials,
   readCredentialsFile,
+  type DriveFileSummary,
   type ParsedEmail,
 } from './gmail-client.js';
 
@@ -42,6 +43,12 @@ interface ReadEmailsArgs {
 }
 
 interface SearchEmailsArgs {
+  account?: string;
+  query: string;
+  max_results?: number;
+}
+
+interface SearchDriveFilesArgs {
   account?: string;
   query: string;
   max_results?: number;
@@ -167,6 +174,12 @@ function emailDateForSort(email: ParsedEmail): number {
   return Number.isFinite(email.internalDate) ? email.internalDate : 0;
 }
 
+function driveFileDateForSort(file: DriveFileSummary): number {
+  if (!file.modifiedTime) return 0;
+  const timestamp = Date.parse(file.modifiedTime);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
   const lines = [
     `**Account**: ${email.accountId} (${email.accountEmail})`,
@@ -184,6 +197,22 @@ function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
       const trimmed = body.length > 600 ? `${body.slice(0, 600)}...` : body;
       lines.push(`**Body**:\n${trimmed}`);
     }
+  }
+
+  return lines.join('\n');
+}
+
+function formatDriveFileItem(file: DriveFileSummary): string {
+  const lines = [
+    `**Account**: ${file.accountId} (${file.accountEmail})`,
+    `**File ID**: ${file.id}`,
+    `**MIME Type**: ${file.mimeType}`,
+    `**Modified**: ${file.modifiedTime || '(unknown)'}`,
+    `**Owners**: ${file.owners.length > 0 ? file.owners.join(', ') : '(unknown)'}`,
+  ];
+
+  if (file.webViewLink) {
+    lines.push(`**Open**: ${file.webViewLink}`);
   }
 
   return lines.join('\n');
@@ -212,6 +241,40 @@ function formatEmailListOutput(input: {
     input.returned.forEach((email, index) => {
       sections.push(`## ${index + 1}. ${email.subject || '(no subject)'}`);
       sections.push(formatEmailItem(email, input.includeBody));
+      sections.push('');
+    });
+  }
+
+  if (input.errors.length > 0) {
+    sections.push('## Account Errors');
+    sections.push(input.errors.map((error) => `- ${error}`).join('\n'));
+  }
+
+  return sections.join('\n');
+}
+
+function formatDriveFileListOutput(input: {
+  title: string;
+  scopeText: string;
+  queryText: string;
+  totalFound: number;
+  returned: DriveFileSummary[];
+  errors: string[];
+}): string {
+  const sections: string[] = [];
+
+  sections.push(`# ${input.title}`);
+  sections.push('');
+  sections.push(`**Scope**: ${input.scopeText}`);
+  sections.push(`**Query**: ${input.queryText}`);
+  sections.push(`**Total Found**: ${input.totalFound}`);
+  sections.push(`**Returned**: ${input.returned.length}`);
+
+  if (input.returned.length > 0) {
+    sections.push('');
+    input.returned.forEach((file, index) => {
+      sections.push(`## ${index + 1}. ${file.name}`);
+      sections.push(formatDriveFileItem(file));
       sections.push('');
     });
   }
@@ -315,6 +378,31 @@ class GmailMultiInboxServer {
               max_results: {
                 type: 'number',
                 description: 'Maximum emails to return (1-100).',
+                default: 25,
+              },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'search_drive_files',
+          description:
+            'Search Google Drive file metadata. Omitting account searches all enabled accounts and merges results.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: {
+                type: 'string',
+                description: 'Optional account id. Omit to aggregate across all enabled accounts.',
+              },
+              query: {
+                type: 'string',
+                description: 'Plain text to search in Drive file names and indexed content.',
+              },
+              max_results: {
+                type: 'number',
+                description: 'Maximum files to return (1-100).',
                 default: 25,
               },
             },
@@ -645,6 +733,8 @@ class GmailMultiInboxServer {
             return await this.handleReadEmails(args);
           case 'search_emails':
             return await this.handleSearchEmails(args);
+          case 'search_drive_files':
+            return await this.handleSearchDriveFiles(args);
           case 'get_email_thread':
             return await this.handleGetThread(args);
           case 'get_labels':
@@ -834,6 +924,63 @@ class GmailMultiInboxServer {
         totalFound: merged.length,
         returned,
         includeBody: false,
+        errors,
+      })
+    );
+  }
+
+  private async handleSearchDriveFiles(
+    rawArgs: Record<string, unknown>
+  ): Promise<CallToolResult> {
+    const args: SearchDriveFilesArgs = {
+      account: valueToString(rawArgs.account, '').trim() || undefined,
+      query: valueToString(rawArgs.query, ''),
+      max_results: valueToNumber(rawArgs.max_results, 25),
+    };
+
+    if (!args.query || args.query.trim() === '') {
+      throw new Error('query is required.');
+    }
+
+    const config = await this.loadConfig();
+    const targetAccounts = resolveReadAccounts(config, args.account);
+    const maxResults = clamp(args.max_results ?? 25, 1, 100);
+
+    const accountResults = await Promise.all(
+      targetAccounts.map(async (account) => {
+        try {
+          const client = await this.getClientForAccount(account);
+          const files = await client.searchDriveFiles(args.query, maxResults);
+          return { account, files, error: null as string | null };
+        } catch (error) {
+          return {
+            account,
+            files: [] as DriveFileSummary[],
+            error: `${account.id}: ${(error as Error).message}`,
+          };
+        }
+      })
+    );
+
+    const merged = accountResults
+      .flatMap((result) => result.files)
+      .sort((a, b) => driveFileDateForSort(b) - driveFileDateForSort(a));
+
+    const errors = accountResults
+      .map((result) => result.error)
+      .filter((error): error is string => Boolean(error));
+
+    const returned = merged.slice(0, maxResults);
+
+    return textResult(
+      formatDriveFileListOutput({
+        title: 'Google Drive Search Results',
+        scopeText: args.account
+          ? `account ${args.account}`
+          : `all enabled accounts (${targetAccounts.length})`,
+        queryText: args.query,
+        totalFound: merged.length,
+        returned,
         errors,
       })
     );
@@ -1162,13 +1309,13 @@ class GmailMultiInboxServer {
 
     return textResult(
       [
-        '# Gmail OAuth Started',
+        '# Google Account OAuth Started',
         '',
         `**Account ID**: ${args.account_id}`,
         `**Email**: ${args.email}`,
         `**Credentials File**: ${defaultPaths.credentialsPath}`,
         '',
-        'Open this URL and approve access:',
+        'Open this URL and approve access for Gmail and Google Drive metadata:',
         authUrl,
         '',
         'Then run `finish_account_auth` with the same account_id and the returned authorization_code.',
@@ -1234,12 +1381,12 @@ class GmailMultiInboxServer {
 
     return textResult(
       [
-        '✅ Gmail OAuth completed.',
+        '✅ Google account OAuth completed.',
         `Account ID: ${args.account_id}`,
         `Email: ${profileEmail}`,
         `Token File: ${paths.tokenPath}`,
         '',
-        'This account is now enabled for aggregate reads/search and explicit write/admin tools.',
+        'This account is now enabled for Gmail tools and Google Drive metadata search.',
       ].join('\n')
     );
   }

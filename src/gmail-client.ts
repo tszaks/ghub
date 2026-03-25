@@ -1,5 +1,5 @@
 import { OAuth2Client, type Credentials } from 'google-auth-library';
-import { google, type gmail_v1 } from 'googleapis';
+import { google, type drive_v3, type gmail_v1 } from 'googleapis';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AccountConfig, type AccountPaths, getAccountPaths } from './config.js';
@@ -8,6 +8,11 @@ export const GMAIL_SCOPES = [
   // Broadest Gmail OAuth scope Google allows (full mailbox access).
   'https://mail.google.com/',
 ] as const;
+
+export const DRIVE_METADATA_SCOPE =
+  'https://www.googleapis.com/auth/drive.metadata.readonly' as const;
+
+export const GOOGLE_ACCOUNT_SCOPES = [...GMAIL_SCOPES, DRIVE_METADATA_SCOPE] as const;
 
 export interface ParsedEmail {
   id: string;
@@ -34,6 +39,17 @@ export interface LabelInfo {
   name: string;
   type?: string;
   messagesTotal?: number;
+}
+
+export interface DriveFileSummary {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  owners: string[];
+  webViewLink?: string;
+  accountId: string;
+  accountEmail: string;
 }
 
 interface OAuthClientOptions {
@@ -310,7 +326,7 @@ export function generateAuthUrlFromCredentials(credentials: unknown): {
   const oauth2Client = createOAuthClientFromCredentials({ credentials });
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: [...GMAIL_SCOPES],
+    scope: [...GOOGLE_ACCOUNT_SCOPES],
     prompt: 'consent',
     include_granted_scopes: true,
   });
@@ -336,15 +352,65 @@ function sanitizeMessageIds(messageIds: string[]): string[] {
   );
 }
 
+function escapeDriveQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+export function buildDriveSearchQuery(query: string): string {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    throw new Error('Drive search query is required.');
+  }
+
+  const escapedQuery = escapeDriveQueryValue(normalizedQuery);
+  return `trashed = false and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
+}
+
+function formatGoogleApiError(error: unknown, fallback: string): string {
+  const googleError = error as {
+    code?: number;
+    message?: string;
+    response?: {
+      data?: {
+        error?: {
+          message?: string;
+        };
+      };
+    };
+  };
+
+  const message =
+    googleError.response?.data?.error?.message || googleError.message || fallback;
+
+  if (
+    googleError.code === 403 &&
+    /insufficient.*scope|insufficient.*permission|has not been used in project/i.test(message)
+  ) {
+    return [
+      'Drive access is not granted for this account yet.',
+      'Re-run `begin_account_auth` and `finish_account_auth` to grant Google Drive metadata access.',
+    ].join(' ');
+  }
+
+  return message;
+}
+
 export class GmailAccountClient {
   readonly account: AccountConfig;
   readonly paths: AccountPaths;
   private readonly gmail: gmail_v1.Gmail;
+  private readonly drive: drive_v3.Drive;
 
-  private constructor(account: AccountConfig, paths: AccountPaths, gmail: gmail_v1.Gmail) {
+  private constructor(
+    account: AccountConfig,
+    paths: AccountPaths,
+    gmail: gmail_v1.Gmail,
+    drive: drive_v3.Drive
+  ) {
     this.account = account;
     this.paths = paths;
     this.gmail = gmail;
+    this.drive = drive;
   }
 
   static async create(configRoot: string, account: AccountConfig): Promise<GmailAccountClient> {
@@ -376,7 +442,8 @@ export class GmailAccountClient {
     });
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    return new GmailAccountClient(account, paths, gmail);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    return new GmailAccountClient(account, paths, gmail, drive);
   }
 
   async getProfileEmail(): Promise<string> {
@@ -396,6 +463,35 @@ export class GmailAccountClient {
       throw new Error('Search query is required.');
     }
     return this.fetchMessages(query, maxResults, false);
+  }
+
+  async searchDriveFiles(query: string, maxResults: number): Promise<DriveFileSummary[]> {
+    const boundedMax = Math.max(1, Math.min(maxResults, 100));
+
+    try {
+      const response = await this.drive.files.list({
+        q: buildDriveSearchQuery(query),
+        pageSize: boundedMax,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'modifiedTime desc',
+        fields:
+          'files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName,emailAddress))',
+      });
+
+      return (response.data.files ?? []).map((file) => ({
+        id: file.id ?? '',
+        name: file.name ?? '(untitled)',
+        mimeType: file.mimeType ?? 'application/octet-stream',
+        modifiedTime: file.modifiedTime ?? undefined,
+        owners: (file.owners ?? []).map((owner) => owner.displayName || owner.emailAddress || '(unknown)'),
+        webViewLink: file.webViewLink ?? undefined,
+        accountId: this.account.id,
+        accountEmail: this.account.email,
+      }));
+    } catch (error) {
+      throw new Error(formatGoogleApiError(error, 'Drive search failed.'));
+    }
   }
 
   private async fetchMessages(
