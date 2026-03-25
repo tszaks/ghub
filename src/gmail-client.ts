@@ -328,7 +328,6 @@ export function generateAuthUrlFromCredentials(credentials: unknown): {
     access_type: 'offline',
     scope: [...GOOGLE_ACCOUNT_SCOPES],
     prompt: 'consent',
-    include_granted_scopes: true,
   });
   return { oauth2Client, authUrl };
 }
@@ -366,7 +365,7 @@ export function buildDriveSearchQuery(query: string): string {
   return `trashed = false and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
 }
 
-function formatGoogleApiError(error: unknown, fallback: string): string {
+export function describeDriveApiError(error: unknown, fallback: string): string {
   const googleError = error as {
     code?: number;
     message?: string;
@@ -374,17 +373,42 @@ function formatGoogleApiError(error: unknown, fallback: string): string {
       data?: {
         error?: {
           message?: string;
+          details?: Array<{
+            '@type'?: string;
+            reason?: string;
+            metadata?: {
+              activationUrl?: string;
+              containerInfo?: string;
+            };
+          }>;
         };
       };
     };
   };
 
-  const message =
-    googleError.response?.data?.error?.message || googleError.message || fallback;
+  const message = googleError.response?.data?.error?.message || googleError.message || fallback;
+  const details = googleError.response?.data?.error?.details ?? [];
+  const serviceDisabled = details.find((detail) => detail.reason === 'SERVICE_DISABLED');
+
+  if (serviceDisabled) {
+    const activationUrl = serviceDisabled.metadata?.activationUrl;
+    const projectId = serviceDisabled.metadata?.containerInfo;
+    const parts = ['Enable the Google Drive API in Google Cloud for this OAuth client project first.'];
+
+    if (projectId) {
+      parts.push(`Project: ${projectId}.`);
+    }
+
+    if (activationUrl) {
+      parts.push(`Activation URL: ${activationUrl}`);
+    }
+
+    return parts.join(' ');
+  }
 
   if (
     googleError.code === 403 &&
-    /insufficient.*scope|insufficient.*permission|has not been used in project/i.test(message)
+    /insufficient.*scope|insufficient.*permission/i.test(message)
   ) {
     return [
       'Drive access is not granted for this account yet.',
@@ -490,7 +514,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       }));
     } catch (error) {
-      throw new Error(formatGoogleApiError(error, 'Drive search failed.'));
+      throw new Error(describeDriveApiError(error, 'Drive search failed.'));
     }
   }
 

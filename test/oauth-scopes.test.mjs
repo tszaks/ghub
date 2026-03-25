@@ -12,8 +12,10 @@ const sampleCredentials = {
 
 test('begin auth requests Drive metadata access alongside Gmail', () => {
   const { authUrl } = generateAuthUrlFromCredentials(sampleCredentials);
-  const scopes = new URL(authUrl).searchParams.get('scope') ?? '';
+  const url = new URL(authUrl);
+  const scopes = url.searchParams.get('scope') ?? '';
 
   assert.match(scopes, /https:\/\/mail\.google\.com\//);
   assert.match(scopes, /https:\/\/www\.googleapis\.com\/auth\/drive\.metadata\.readonly/);
+  assert.notEqual(url.searchParams.get('include_granted_scopes'), 'true');
 });
