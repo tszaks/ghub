@@ -788,21 +788,31 @@ export class GmailAccountClient {
       id: part.attachmentId,
     });
 
+    // Distinguish an API-level failure (data field absent) from a legitimate
+    // zero-byte attachment (data field present as empty string): `== null`
+    // matches null/undefined only, letting `''` through to the length check.
     const raw = attachmentResponse.data.data;
-    if (!raw) {
+    if (raw == null) {
       throw new Error(
-        `Gmail returned no data for attachment on message ${trimmedMessageId}.`
+        `Gmail returned no data field for attachment on message ${trimmedMessageId}.`
       );
     }
 
     const data = decodeBase64UrlToBuffer(raw);
     // Buffer.from(base64) silently drops invalid characters, so a truncated
     // or corrupted payload produces a short buffer with no error. Compare
-    // the decoded length to Gmail's reported metadata size and fail loudly
-    // on any mismatch rather than returning silently-corrupt bytes.
-    if (metadata.size > 0 && data.length !== metadata.size) {
+    // the decoded length to Gmail's reported metadata size unconditionally:
+    //   - normal case: sizes match, passes
+    //   - legitimate zero-byte attachment: both 0, passes
+    //   - truncated / corrupted base64: mismatch, fails loudly
+    //   - malformed upstream size clamped to 0 + non-empty payload: fails
+    //     loudly, surfacing the upstream corruption instead of silently
+    //     returning arbitrary bytes. (The clamp in extractAttachmentParts
+    //     and this check must stay paired — skipping the check when size
+    //     is 0 reopens that silent-failure gap.)
+    if (data.length !== metadata.size) {
       throw new Error(
-        `Attachment decode produced ${data.length} bytes on message ${trimmedMessageId}, expected ${metadata.size}. The base64 payload may be truncated or corrupted.`
+        `Attachment decode produced ${data.length} bytes on message ${trimmedMessageId}, expected ${metadata.size}. The base64 payload may be truncated, corrupted, or the upstream size was malformed.`
       );
     }
 
