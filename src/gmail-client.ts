@@ -149,6 +149,10 @@ export function extractAttachmentParts(
     // Clamp size: malformed Gmail responses could produce NaN or a negative
     // number, which would silently bypass the MAX_ATTACHMENT_BYTES cap
     // downstream (NaN > maxBytes is false). Coerce both cases to 0.
+    // Paired with the unconditional length check in downloadByPartId: if
+    // that check is ever re-gated on `size > 0`, the clamped-to-0 case
+    // silently returns arbitrary bytes. The clamp and the check must stay
+    // paired — see commit ab27b81 for the history.
     const rawSize = Number(part.body?.size ?? 0);
     const size = Number.isFinite(rawSize) && rawSize >= 0 ? Math.floor(rawSize) : 0;
 
@@ -486,6 +490,19 @@ export class GmailAccountClient {
     return new GmailAccountClient(account, paths, gmail);
   }
 
+  /**
+   * Test-only factory. Bypasses the OAuth setup in `create` so unit tests
+   * can inject a fake `gmail` client for `downloadByPartId` / `listAttachments`
+   * assertions. **Never call from production code.**
+   */
+  static __forTests(
+    account: AccountConfig,
+    paths: AccountPaths,
+    gmail: unknown
+  ): GmailAccountClient {
+    return new GmailAccountClient(account, paths, gmail as gmail_v1.Gmail);
+  }
+
   async getProfileEmail(): Promise<string> {
     const profile = await this.gmail.users.getProfile({ userId: 'me' });
     if (!profile.data.emailAddress) {
@@ -800,16 +817,14 @@ export class GmailAccountClient {
 
     const data = decodeBase64UrlToBuffer(raw);
     // Buffer.from(base64) silently drops invalid characters, so a truncated
-    // or corrupted payload produces a short buffer with no error. Compare
-    // the decoded length to Gmail's reported metadata size unconditionally:
-    //   - normal case: sizes match, passes
-    //   - legitimate zero-byte attachment: both 0, passes
-    //   - truncated / corrupted base64: mismatch, fails loudly
-    //   - malformed upstream size clamped to 0 + non-empty payload: fails
-    //     loudly, surfacing the upstream corruption instead of silently
-    //     returning arbitrary bytes. (The clamp in extractAttachmentParts
-    //     and this check must stay paired — skipping the check when size
-    //     is 0 reopens that silent-failure gap.)
+    // payload produces a short buffer with no error. Compare decoded length
+    // to Gmail's reported size unconditionally — including when size is 0.
+    //
+    // Paired with the NaN/negative size clamp in extractAttachmentParts: a
+    // malformed upstream size gets clamped to 0, and without this check a
+    // non-empty payload would then be returned as valid bytes. Re-adding a
+    // `metadata.size > 0` guard here reopens that silent-failure gap (see
+    // commit ab27b81).
     if (data.length !== metadata.size) {
       throw new Error(
         `Attachment decode produced ${data.length} bytes on message ${trimmedMessageId}, expected ${metadata.size}. The base64 payload may be truncated, corrupted, or the upstream size was malformed.`
