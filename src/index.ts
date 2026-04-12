@@ -964,25 +964,24 @@ class GmailMultiInboxServer {
     const account = resolveWriteAccount(config, account_id);
     const client = await this.getClientForAccount(account);
 
-    const attachments = await client.listAttachments(message_id);
-    const metadata = attachments.find((a) => a.partId === part_id);
-    if (!metadata) {
+    const result = await client.downloadByPartId(message_id, part_id, MAX_ATTACHMENT_BYTES);
+
+    if (result.kind === 'not_found') {
       return textResult(
         `No attachment with part_id=${part_id} on message ${message_id} in account ${account.id}.`
       );
     }
 
-    if (metadata.size > MAX_ATTACHMENT_BYTES) {
+    if (result.kind === 'too_large') {
       return textResult(
         [
-          `Attachment ${metadata.filename} is ${formatBytes(metadata.size)}, which exceeds the ${formatBytes(MAX_ATTACHMENT_BYTES)} cap.`,
+          `Attachment ${result.metadata.filename} is ${formatBytes(result.metadata.size)}, which exceeds the ${formatBytes(MAX_ATTACHMENT_BYTES)} cap.`,
           `Gmail caps outbound attachments at 25 MB; larger payloads cannot be safely returned over MCP stdio.`,
         ].join('\n')
       );
     }
 
-    const data = await client.getAttachment(message_id, metadata.attachmentId);
-
+    const { data, metadata } = result;
     const text = [
       `Downloaded ${metadata.filename} (${formatBytes(data.length)}, ${metadata.mimeType})`,
       `Account: ${account.id} (${account.email})`,

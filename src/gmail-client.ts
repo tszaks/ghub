@@ -9,12 +9,37 @@ export const GMAIL_SCOPES = [
   'https://mail.google.com/',
 ] as const;
 
+/**
+ * Publicly exposed attachment descriptor. Safe to persist in `ParsedEmail`
+ * and hand across process boundaries. All fields are durable across Gmail
+ * API calls for the same message.
+ *
+ * Note: the ephemeral `body.attachmentId` Gmail returns is NOT included
+ * here. It rotates on every `messages.get` and is therefore only valid
+ * within a single fetch. To download an attachment, pass the stable
+ * `partId` to `download_attachment` / `GmailAccountClient.downloadByPartId`,
+ * which re-fetches and resolves internally.
+ */
 export interface AttachmentMetadata {
+  /** Stable Gmail MIME part id (e.g. `"0.1"`). Use as the download key. */
   partId: string;
-  attachmentId: string;
+  /** Attachment filename as set by the sender. */
   filename: string;
+  /** MIME type of the attachment payload, e.g. `application/pdf`. */
   mimeType: string;
+  /** Size in bytes, non-negative. */
   size: number;
+}
+
+/**
+ * Internal shape carrying the ephemeral Gmail `body.attachmentId` alongside
+ * the public metadata. **Never export.** The `attachmentId` field is only
+ * valid within the `messages.get` response that produced it; leaking this
+ * shape past its producing scope invites stale-id bugs.
+ */
+interface AttachmentPart extends AttachmentMetadata {
+  /** Ephemeral Gmail body.attachmentId — rotates per messages.get. Never persist. */
+  attachmentId: string;
 }
 
 export interface ParsedEmail {
@@ -78,10 +103,27 @@ function getHeaderValue(
   return found?.value?.trim() ?? '';
 }
 
-function extractAttachments(payload?: gmail_v1.Schema$MessagePart): AttachmentMetadata[] {
+/**
+ * Walks a Gmail `messages.get(format: 'full')` payload and collects every
+ * real attachment as an internal `AttachmentPart` (includes the ephemeral
+ * `body.attachmentId`).
+ *
+ * **Exported for unit tests only.** Production callers should go through
+ * `listAttachments` / `downloadByPartId` on `GmailAccountClient`, which
+ * return the public `AttachmentMetadata` shape.
+ *
+ * Filters:
+ * - requires `filename` and `body.attachmentId` (skips body parts)
+ * - skips parts marked `Content-Disposition: inline` (embedded logos,
+ *   tracking pixels, styled icons)
+ * - normalizes the root payload's empty `partId` to `"0"`
+ */
+export function extractAttachmentParts(
+  payload?: gmail_v1.Schema$MessagePart
+): AttachmentPart[] {
   if (!payload) return [];
 
-  const results: AttachmentMetadata[] = [];
+  const results: AttachmentPart[] = [];
   // Seed with the root payload itself — some messages (bare PDF, some forwards)
   // carry filename + body.attachmentId on the root and have no child parts.
   const stack: gmail_v1.Schema$MessagePart[] = [payload];
@@ -103,8 +145,12 @@ function extractAttachments(payload?: gmail_v1.Schema$MessagePart): AttachmentMe
     const disposition = getHeaderValue(part.headers, 'Content-Disposition').toLowerCase();
     if (disposition.startsWith('inline')) continue;
 
-    // Gmail uses `""` for the root payload's partId. Substitute "0" so the
-    // id is usable as a stable download key; child parts are never "0".
+    // Gmail only emits an empty `partId` for the root payload (child parts
+    // always get a non-empty id like "0" or "1.2"). Substitute "0" so the
+    // root is usable as a stable download key in the bare-payload case —
+    // there is no collision with a real child "0" because the root only
+    // reaches this push when it carries the attachment directly (no
+    // children walked).
     const partId = part.partId || '0';
 
     results.push({
@@ -116,6 +162,15 @@ function extractAttachments(payload?: gmail_v1.Schema$MessagePart): AttachmentMe
     });
   }
   return results;
+}
+
+function toAttachmentMetadata(part: AttachmentPart): AttachmentMetadata {
+  return {
+    partId: part.partId,
+    filename: part.filename,
+    mimeType: part.mimeType,
+    size: part.size,
+  };
 }
 
 function extractEmailBody(payload?: gmail_v1.Schema$MessagePart): string {
@@ -688,29 +743,60 @@ export class GmailAccountClient {
       id: trimmed,
       format: 'full',
     });
-    return extractAttachments(response.data.payload);
+    return extractAttachmentParts(response.data.payload).map(toAttachmentMetadata);
   }
 
-  async getAttachment(messageId: string, attachmentId: string): Promise<Buffer> {
+  /**
+   * Resolve a stable `partId` to a fresh `body.attachmentId` and fetch the
+   * decoded bytes. Encapsulates the rotating-id round trip so callers never
+   * need to hold an ephemeral `attachmentId`. Enforces `maxBytes` against
+   * the metadata reported by Gmail before pulling the payload.
+   *
+   * Returns a discriminated union so expected failure modes (not found,
+   * too large) never throw — they surface to the MCP host as clean text
+   * results instead of handler crashes.
+   */
+  async downloadByPartId(
+    messageId: string,
+    partId: string,
+    maxBytes: number
+  ): Promise<
+    | { kind: 'ok'; data: Buffer; metadata: AttachmentMetadata }
+    | { kind: 'not_found' }
+    | { kind: 'too_large'; metadata: AttachmentMetadata }
+  > {
     const trimmedMessageId = messageId.trim();
-    const trimmedAttachmentId = attachmentId.trim();
+    const trimmedPartId = partId.trim();
     if (!trimmedMessageId) throw new Error('message_id is required.');
-    if (!trimmedAttachmentId) throw new Error('attachment_id is required.');
+    if (!trimmedPartId) throw new Error('part_id is required.');
 
-    const response = await this.gmail.users.messages.attachments.get({
+    const messageResponse = await this.gmail.users.messages.get({
       userId: 'me',
-      messageId: trimmedMessageId,
-      id: trimmedAttachmentId,
+      id: trimmedMessageId,
+      format: 'full',
     });
 
-    const raw = response.data.data;
+    const parts = extractAttachmentParts(messageResponse.data.payload);
+    const part = parts.find((p) => p.partId === trimmedPartId);
+    if (!part) return { kind: 'not_found' };
+
+    const metadata = toAttachmentMetadata(part);
+    if (part.size > maxBytes) return { kind: 'too_large', metadata };
+
+    const attachmentResponse = await this.gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId: trimmedMessageId,
+      id: part.attachmentId,
+    });
+
+    const raw = attachmentResponse.data.data;
     if (!raw) {
       throw new Error(
         `Gmail returned no data for attachment on message ${trimmedMessageId}.`
       );
     }
 
-    return decodeBase64UrlToBuffer(raw);
+    return { kind: 'ok', data: decodeBase64UrlToBuffer(raw), metadata };
   }
 
   async sendEmail(input: {
@@ -750,7 +836,7 @@ export class GmailAccountClient {
       internalDate: Number.isFinite(internalDate) ? internalDate : 0,
       body: includeBody ? extractEmailBody(message.payload) : undefined,
       labels: message.labelIds ?? [],
-      attachments: extractAttachments(message.payload),
+      attachments: extractAttachmentParts(message.payload).map(toAttachmentMetadata),
       accountId: this.account.id,
       accountEmail: this.account.email,
     };
