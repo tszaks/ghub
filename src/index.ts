@@ -34,6 +34,8 @@ import {
   type ParsedEmail,
 } from './gmail-client.js';
 
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
 interface ReadEmailsArgs {
   account?: string;
   query?: string;
@@ -123,6 +125,13 @@ function textResult(text: string): CallToolResult {
   };
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function clamp(value: number, minValue: number, maxValue: number): number {
   return Math.max(minValue, Math.min(value, maxValue));
 }
@@ -177,6 +186,13 @@ function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
     `**Thread ID**: ${email.threadId}`,
     `**Preview**: ${email.snippet || '(none)'}`,
   ];
+
+  if (email.attachments.length > 0) {
+    const summary = email.attachments
+      .map((a) => `${a.filename} (${formatBytes(a.size)}, part=${a.partId})`)
+      .join(', ');
+    lines.push(`**Attachments**: ${summary}`);
+  }
 
   if (includeBody) {
     const body = (email.body || '').trim();
@@ -332,6 +348,39 @@ class GmailMultiInboxServer {
               thread_id: { type: 'string', description: 'Gmail thread id.' },
             },
             required: ['account', 'thread_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'list_attachments',
+          description:
+            'List attachments on a specific Gmail message. Returns each attachment with filename, mime type, size, and stable MIME part id for use with download_attachment.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              message_id: { type: 'string', description: 'Gmail message id.' },
+            },
+            required: ['account', 'message_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'download_attachment',
+          description:
+            'Download a Gmail attachment as an MCP embedded resource. The host client (Claude Code / Claude Desktop) handles saving or rendering — the server does not write to disk. Enforces a 25 MB cap.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              message_id: { type: 'string', description: 'Gmail message id.' },
+              part_id: {
+                type: 'string',
+                description:
+                  'Stable Gmail MIME part id (e.g. "0.1") as shown by list_attachments or the Attachments line in read_emails. Note: Gmail rotates the underlying attachment id per request, so the server resolves part_id to a fresh attachment id internally.',
+              },
+            },
+            required: ['account', 'message_id', 'part_id'],
             additionalProperties: false,
           },
         },
@@ -647,6 +696,10 @@ class GmailMultiInboxServer {
             return await this.handleSearchEmails(args);
           case 'get_email_thread':
             return await this.handleGetThread(args);
+          case 'list_attachments':
+            return await this.handleListAttachments(args);
+          case 'download_attachment':
+            return await this.handleDownloadAttachment(args);
           case 'get_labels':
             return await this.handleGetLabels(args);
           case 'mark_as_read':
@@ -866,6 +919,90 @@ class GmailMultiInboxServer {
     });
 
     return textResult(lines.join('\n'));
+  }
+
+  private async handleListAttachments(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account_id = valueToString(rawArgs.account).trim();
+    const message_id = valueToString(rawArgs.message_id).trim();
+    if (!message_id) throw new Error('message_id is required.');
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, account_id);
+    const client = await this.getClientForAccount(account);
+
+    const attachments = await client.listAttachments(message_id);
+
+    if (attachments.length === 0) {
+      return textResult(`No attachments on message ${message_id}.`);
+    }
+
+    const lines = [
+      `# Attachments on message ${message_id}`,
+      '',
+      `**Account**: ${account.id} (${account.email})`,
+      `**Count**: ${attachments.length}`,
+      '',
+    ];
+    attachments.forEach((att, index) => {
+      lines.push(
+        `#${index + 1} ${att.filename} · ${att.mimeType} · ${formatBytes(att.size)} · part=${att.partId}`
+      );
+    });
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleDownloadAttachment(
+    rawArgs: Record<string, unknown>
+  ): Promise<CallToolResult> {
+    const account_id = valueToString(rawArgs.account).trim();
+    const message_id = valueToString(rawArgs.message_id).trim();
+    const part_id = valueToString(rawArgs.part_id).trim();
+    if (!message_id) throw new Error('message_id is required.');
+    if (!part_id) throw new Error('part_id is required.');
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, account_id);
+    const client = await this.getClientForAccount(account);
+
+    const attachments = await client.listAttachments(message_id);
+    const metadata = attachments.find((a) => a.partId === part_id);
+    if (!metadata) {
+      return textResult(
+        `No attachment with part_id=${part_id} on message ${message_id} in account ${account.id}.`
+      );
+    }
+
+    if (metadata.size > MAX_ATTACHMENT_BYTES) {
+      return textResult(
+        [
+          `Attachment ${metadata.filename} is ${formatBytes(metadata.size)}, which exceeds the ${formatBytes(MAX_ATTACHMENT_BYTES)} cap.`,
+          `Gmail caps outbound attachments at 25 MB; larger payloads cannot be safely returned over MCP stdio.`,
+        ].join('\n')
+      );
+    }
+
+    const data = await client.getAttachment(message_id, metadata.attachmentId);
+
+    const text = [
+      `Downloaded ${metadata.filename} (${formatBytes(data.length)}, ${metadata.mimeType})`,
+      `Account: ${account.id} (${account.email})`,
+      `Message ID: ${message_id}`,
+      `Part ID: ${part_id}`,
+    ].join('\n');
+
+    return {
+      content: [
+        { type: 'text', text },
+        {
+          type: 'resource',
+          resource: {
+            uri: `gmail-attachment://${account.id}/${message_id}/${part_id}`,
+            mimeType: metadata.mimeType,
+            blob: data.toString('base64'),
+          },
+        },
+      ],
+    };
   }
 
   private async handleGetLabels(rawArgs: Record<string, unknown>): Promise<CallToolResult> {

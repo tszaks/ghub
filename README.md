@@ -35,10 +35,12 @@ Unlike existing Gmail MCP servers, this implementation offers:
 
 ### Read Operations
 - **`list_accounts`** - View all configured accounts and their status
-- **`read_emails`** - Fetch recent emails (aggregates across all accounts by default)
+- **`read_emails`** - Fetch recent emails (aggregates across all accounts by default); response includes an Attachments summary per message when present
 - **`search_emails`** - Search using Gmail query syntax across multiple accounts
 - **`get_email_thread`** - Retrieve complete conversation threads
 - **`get_labels`** - List all labels for an account
+- **`list_attachments`** - List attachments on a specific message with filename, mime type, size, and stable MIME part id
+- **`download_attachment`** - Download a Gmail attachment as an MCP embedded resource (host client handles saving/rendering)
 
 ### Write Operations
 - **`send_email`** - Send emails from any configured account, with optional local file attachments
@@ -384,6 +386,31 @@ List all labels for an account.
 - `account` (required): Account ID
 
 **Returns:** Array of label objects with IDs and names
+
+#### `list_attachments`
+List attachments on a specific Gmail message.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_id` (required): Gmail message ID
+
+**Returns:** Numbered text list with each attachment's filename, MIME type, human-readable size, and `part_id` (e.g. `0.1`) for use with `download_attachment`. Returns `No attachments on message <id>.` when the message has none.
+
+#### `download_attachment`
+Download a Gmail attachment and return it as an MCP embedded resource. The host client (Claude Code / Claude Desktop) handles saving or rendering — the server does not write to disk and does not accept a `save_path` argument.
+
+**Parameters:**
+- `account` (required): Account ID
+- `message_id` (required): Gmail message ID
+- `part_id` (required): Stable Gmail MIME part id (e.g. `0.1`) from `list_attachments` or the `Attachments` summary in `read_emails`
+
+> **Why `part_id` and not Gmail's attachment id?** Gmail rotates the underlying `body.attachmentId` on every `messages.get` request, so an id captured from a previous read call is unusable on the next call. The MIME `partId` is stable, and the server resolves it to a fresh attachment id internally on each download.
+
+**Returns:** A tool result with two content items:
+- A `text` item summarizing the downloaded filename, size, MIME type, account, message id, and part id
+- A `resource` item (MCP `EmbeddedResource`) of the form `{ type: "resource", resource: { uri: "gmail-attachment://<account>/<message>/<part>", mimeType, blob: <base64> } }`
+
+**Limits:** Hard-capped at 25 MB (Gmail's own attachment ceiling). Larger attachments return an error text result rather than the resource.
 
 ### Write Operations
 

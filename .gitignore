@@ -6,3 +6,6 @@ dist/
 *.json.bak
 credentials.json
 token.json
+bun.lock
+.claude-sandbox/
+.claude-plans/

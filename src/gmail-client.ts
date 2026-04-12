@@ -9,6 +9,14 @@ export const GMAIL_SCOPES = [
   'https://mail.google.com/',
 ] as const;
 
+export interface AttachmentMetadata {
+  partId: string;
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface ParsedEmail {
   id: string;
   threadId: string;
@@ -20,6 +28,7 @@ export interface ParsedEmail {
   internalDate: number;
   body?: string;
   labels: string[];
+  attachments: AttachmentMetadata[];
   accountId: string;
   accountEmail: string;
 }
@@ -47,9 +56,13 @@ export interface EmailAttachment {
 }
 
 function decodeBase64Url(value: string): string {
+  return decodeBase64UrlToBuffer(value).toString('utf8');
+}
+
+function decodeBase64UrlToBuffer(value: string): Buffer {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-  return Buffer.from(padded, 'base64').toString('utf8');
+  return Buffer.from(padded, 'base64');
 }
 
 function stripHtmlTags(input: string): string {
@@ -63,6 +76,46 @@ function getHeaderValue(
   if (!headers) return '';
   const found = headers.find((header) => header.name?.toLowerCase() === name.toLowerCase());
   return found?.value?.trim() ?? '';
+}
+
+function extractAttachments(payload?: gmail_v1.Schema$MessagePart): AttachmentMetadata[] {
+  if (!payload) return [];
+
+  const results: AttachmentMetadata[] = [];
+  // Seed with the root payload itself — some messages (bare PDF, some forwards)
+  // carry filename + body.attachmentId on the root and have no child parts.
+  const stack: gmail_v1.Schema$MessagePart[] = [payload];
+  while (stack.length > 0) {
+    const part = stack.shift();
+    if (!part) continue;
+
+    if (part.parts?.length) {
+      stack.push(...part.parts);
+    }
+
+    const filename = part.filename?.trim();
+    const attachmentId = part.body?.attachmentId;
+    if (!filename || !attachmentId) continue;
+
+    // Only surface real attachments. Content-Disposition: inline marks embedded
+    // body content (logos, tracking pixels, styled icons) that a user doesn't
+    // think of as an "attachment" even though it has a filename + attachmentId.
+    const disposition = getHeaderValue(part.headers, 'Content-Disposition').toLowerCase();
+    if (disposition.startsWith('inline')) continue;
+
+    // Gmail uses `""` for the root payload's partId. Substitute "0" so the
+    // id is usable as a stable download key; child parts are never "0".
+    const partId = part.partId || '0';
+
+    results.push({
+      partId,
+      attachmentId,
+      filename,
+      mimeType: part.mimeType ?? 'application/octet-stream',
+      size: Number(part.body?.size ?? 0),
+    });
+  }
+  return results;
 }
 
 function extractEmailBody(payload?: gmail_v1.Schema$MessagePart): string {
@@ -424,8 +477,7 @@ export class GmailAccountClient {
         this.gmail.users.messages.get({
           userId: 'me',
           id: messageId,
-          format: includeBody ? 'full' : 'metadata',
-          metadataHeaders: includeBody ? undefined : ['From', 'To', 'Subject', 'Date'],
+          format: 'full',
         })
       )
     );
@@ -627,6 +679,40 @@ export class GmailAccountClient {
     return ids.length;
   }
 
+  async listAttachments(messageId: string): Promise<AttachmentMetadata[]> {
+    const trimmed = messageId.trim();
+    if (!trimmed) throw new Error('message_id is required.');
+
+    const response = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: trimmed,
+      format: 'full',
+    });
+    return extractAttachments(response.data.payload);
+  }
+
+  async getAttachment(messageId: string, attachmentId: string): Promise<Buffer> {
+    const trimmedMessageId = messageId.trim();
+    const trimmedAttachmentId = attachmentId.trim();
+    if (!trimmedMessageId) throw new Error('message_id is required.');
+    if (!trimmedAttachmentId) throw new Error('attachment_id is required.');
+
+    const response = await this.gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId: trimmedMessageId,
+      id: trimmedAttachmentId,
+    });
+
+    const raw = response.data.data;
+    if (!raw) {
+      throw new Error(
+        `Gmail returned no data for attachment on message ${trimmedMessageId}.`
+      );
+    }
+
+    return decodeBase64UrlToBuffer(raw);
+  }
+
   async sendEmail(input: {
     to: string;
     subject: string;
@@ -664,6 +750,7 @@ export class GmailAccountClient {
       internalDate: Number.isFinite(internalDate) ? internalDate : 0,
       body: includeBody ? extractEmailBody(message.payload) : undefined,
       labels: message.labelIds ?? [],
+      attachments: extractAttachments(message.payload),
       accountId: this.account.id,
       accountEmail: this.account.email,
     };
