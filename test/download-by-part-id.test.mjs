@@ -3,10 +3,10 @@
 // pulls the decoded bytes. Uses __forTests to inject a fake `gmail` client
 // so the test runs offline with no real OAuth.
 //
-// These tests specifically guard the silent-failure gap that iteration 2
-// of the finalize-branch review accidentally re-opened and iteration 4
-// closed: a malformed upstream size clamped to 0 must NOT silently return
-// arbitrary bytes. See commit ab27b81 for the full history.
+// Load-bearing invariant these tests guard: a malformed upstream size
+// that gets clamped to 0 by extractAttachmentParts must NOT silently
+// return arbitrary bytes from downloadByPartId. See commit ab27b81 for
+// the full history of how this gap was opened and closed.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,8 +52,8 @@ const MAX = 25 * 1024 * 1024;
 
 test('downloadByPartId: legitimate zero-byte attachment returns ok', async () => {
   // Gmail delivers a legitimate zero-byte attachment as `data: ''` on the
-  // attachments.get response; the pre-iteration-4 `if (!raw)` check used to
-  // treat this as "no data" and throw. The new `raw == null` check lets
+  // attachments.get response; an `if (!raw)` check would treat this as
+  // "no data" and throw. The `raw == null` check in downloadByPartId lets
   // '' through to the unconditional length check, where 0 === 0 passes.
   const client = makeClient(
     makeFakeGmail({
@@ -73,15 +73,14 @@ test('downloadByPartId: legitimate zero-byte attachment returns ok', async () =>
 });
 
 test('downloadByPartId: malformed upstream size clamped to 0 + non-empty payload throws', async () => {
-  // This is the iteration-3-finding regression fence. A malformed Gmail
-  // response reports size = -1 (or "NaN"), extractAttachmentParts clamps
-  // it to 0, and without the unconditional length check downloadByPartId
-  // used to silently return whatever bytes attachments.get gave back.
-  // With the fix, the unconditional data.length !== metadata.size check
-  // fires and surfaces the upstream corruption as a thrown error.
+  // Regression fence. A malformed Gmail response reports size = -1 (or
+  // "NaN"), extractAttachmentParts clamps it to 0, and without the
+  // unconditional length check downloadByPartId would silently return
+  // whatever bytes attachments.get gave back. The `data.length !==
+  // metadata.size` check fires and surfaces the upstream corruption.
   //
-  // If a future maintainer re-adds `metadata.size > 0 &&` to the length
-  // check, this test is the line of defense that catches it.
+  // If a future maintainer re-adds `metadata.size > 0 &&` to that check
+  // (the gap commit ab27b81 closed), this test is the line of defense.
   const client = makeClient(
     makeFakeGmail({
       messagePayload: {

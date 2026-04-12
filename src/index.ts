@@ -924,7 +924,6 @@ class GmailMultiInboxServer {
   private async handleListAttachments(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
     const account_id = valueToString(rawArgs.account).trim();
     const message_id = valueToString(rawArgs.message_id).trim();
-    if (!message_id) throw new Error('message_id is required.');
 
     const config = await this.loadConfig();
     const account = resolveWriteAccount(config, account_id);
@@ -957,8 +956,6 @@ class GmailMultiInboxServer {
     const account_id = valueToString(rawArgs.account).trim();
     const message_id = valueToString(rawArgs.message_id).trim();
     const part_id = valueToString(rawArgs.part_id).trim();
-    if (!message_id) throw new Error('message_id is required.');
-    if (!part_id) throw new Error('part_id is required.');
 
     const config = await this.loadConfig();
     const account = resolveWriteAccount(config, account_id);
