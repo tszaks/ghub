@@ -11,32 +11,24 @@ export const GMAIL_SCOPES = [
 
 /**
  * Publicly exposed attachment descriptor. Safe to persist in `ParsedEmail`
- * and hand across process boundaries. All fields are durable across Gmail
- * API calls for the same message.
+ * and hand across process boundaries; `partId` is stable across
+ * `messages.get` calls for the same message.
  *
- * Note: the ephemeral `body.attachmentId` Gmail returns is NOT included
- * here. It rotates on every `messages.get` and is therefore only valid
- * within a single fetch. To download an attachment, pass the stable
- * `partId` to `download_attachment` / `GmailAccountClient.downloadByPartId`,
- * which re-fetches and resolves internally.
+ * Gmail's ephemeral `body.attachmentId` is NOT included — it rotates on
+ * every `messages.get` and is only valid within a single fetch. To
+ * download an attachment, pass the stable `partId` to `download_attachment`
+ * / `GmailAccountClient.downloadByPartId`, which re-fetches and resolves
+ * internally.
  */
 export interface AttachmentMetadata {
   /** Stable Gmail MIME part id (e.g. `"0.1"`). Use as the download key. */
   partId: string;
-  /** Attachment filename as set by the sender. */
   filename: string;
-  /** MIME type of the attachment payload, e.g. `application/pdf`. */
   mimeType: string;
-  /** Size in bytes, non-negative. */
   size: number;
 }
 
-/**
- * Internal shape carrying the ephemeral Gmail `body.attachmentId` alongside
- * the public metadata. **Never export.** The `attachmentId` field is only
- * valid within the `messages.get` response that produced it; leaking this
- * shape past its producing scope invites stale-id bugs.
- */
+/** Internal shape carrying the ephemeral Gmail `body.attachmentId`. Never export. */
 interface AttachmentPart extends AttachmentMetadata {
   /** Ephemeral Gmail body.attachmentId — rotates per messages.get. Never persist. */
   attachmentId: string;
@@ -53,7 +45,7 @@ export interface ParsedEmail {
   internalDate: number;
   body?: string;
   labels: string[];
-  attachments: AttachmentMetadata[];
+  attachments: readonly AttachmentMetadata[];
   accountId: string;
   accountEmail: string;
 }
@@ -116,7 +108,10 @@ function getHeaderValue(
  * - requires `filename` and `body.attachmentId` (skips body parts)
  * - skips parts marked `Content-Disposition: inline` (embedded logos,
  *   tracking pixels, styled icons)
- * - normalizes the root payload's empty `partId` to `"0"`
+ *
+ * Normalization:
+ * - root payload's empty `partId` becomes `"0"`
+ * - non-finite / negative `body.size` becomes `0`
  */
 export function extractAttachmentParts(
   payload?: gmail_v1.Schema$MessagePart
@@ -145,20 +140,24 @@ export function extractAttachmentParts(
     const disposition = getHeaderValue(part.headers, 'Content-Disposition').toLowerCase();
     if (disposition.startsWith('inline')) continue;
 
-    // Gmail only emits an empty `partId` for the root payload (child parts
-    // always get a non-empty id like "0" or "1.2"). Substitute "0" so the
-    // root is usable as a stable download key in the bare-payload case —
-    // there is no collision with a real child "0" because the root only
-    // reaches this push when it carries the attachment directly (no
-    // children walked).
+    // Gmail leaves `partId` empty only on the root payload. Substitute `"0"`
+    // so the bare-payload case (root carries the attachment, no children)
+    // still has a stable download key; real child ids are never shadowed
+    // because this branch only fires when the root itself is the attachment.
     const partId = part.partId || '0';
+
+    // Clamp size: malformed Gmail responses could produce NaN or a negative
+    // number, which would silently bypass the MAX_ATTACHMENT_BYTES cap
+    // downstream (NaN > maxBytes is false). Coerce both cases to 0.
+    const rawSize = Number(part.body?.size ?? 0);
+    const size = Number.isFinite(rawSize) && rawSize >= 0 ? Math.floor(rawSize) : 0;
 
     results.push({
       partId,
       attachmentId,
       filename,
       mimeType: part.mimeType ?? 'application/octet-stream',
-      size: Number(part.body?.size ?? 0),
+      size,
     });
   }
   return results;
@@ -796,7 +795,18 @@ export class GmailAccountClient {
       );
     }
 
-    return { kind: 'ok', data: decodeBase64UrlToBuffer(raw), metadata };
+    const data = decodeBase64UrlToBuffer(raw);
+    // Buffer.from(base64) silently drops invalid characters, so a truncated
+    // or corrupted payload produces a short buffer with no error. Compare
+    // the decoded length to Gmail's reported metadata size and fail loudly
+    // on any mismatch rather than returning silently-corrupt bytes.
+    if (metadata.size > 0 && data.length !== metadata.size) {
+      throw new Error(
+        `Attachment decode produced ${data.length} bytes on message ${trimmedMessageId}, expected ${metadata.size}. The base64 payload may be truncated or corrupted.`
+      );
+    }
+
+    return { kind: 'ok', data, metadata };
   }
 
   async sendEmail(input: {

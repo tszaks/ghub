@@ -220,6 +220,90 @@ test('size defaults to 0 when body.size is missing', () => {
   assert.equal(result[0].size, 0);
 });
 
+test('inline logo + real PDF in same multipart/mixed: only PDF returned', () => {
+  // Real-world marketing/receipt shape: a multipart/related block with a
+  // text body + inline logo, nested inside multipart/mixed alongside a
+  // real PDF attachment. The inline filter must skip the logo while the
+  // walker continues on to find the PDF.
+  const payload = part({
+    mimeType: 'multipart/mixed',
+    parts: [
+      part({
+        partId: '0',
+        mimeType: 'multipart/related',
+        parts: [
+          part({
+            partId: '0.0',
+            mimeType: 'text/html',
+            body: { data: 'PGh0bWw+PC9odG1sPg==', size: 13 },
+          }),
+          part({
+            partId: '0.1',
+            filename: 'logo.png',
+            mimeType: 'image/png',
+            body: { attachmentId: 'ATT_LOGO', size: 900 },
+            headers: [{ name: 'Content-Disposition', value: 'inline' }],
+          }),
+        ],
+      }),
+      part({
+        partId: '1',
+        filename: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        body: { attachmentId: 'ATT_INV', size: 2048 },
+        headers: [{ name: 'Content-Disposition', value: 'attachment' }],
+      }),
+    ],
+  });
+  const result = extractAttachmentParts(payload);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].partId, '1');
+  assert.equal(result[0].filename, 'invoice.pdf');
+});
+
+test('header name lookup is case-insensitive (content-disposition vs Content-Disposition)', () => {
+  const payload = part({
+    parts: [
+      part({
+        partId: '0',
+        filename: 'pixel.gif',
+        mimeType: 'image/gif',
+        body: { attachmentId: 'ATT_PIXEL', size: 43 },
+        headers: [{ name: 'content-disposition', value: 'inline' }],
+      }),
+    ],
+  });
+  assert.deepEqual(extractAttachmentParts(payload), []);
+});
+
+test('size coerces NaN / negative to 0 (prevents cap bypass)', () => {
+  const nanPayload = part({
+    parts: [
+      part({
+        partId: '0',
+        filename: 'bogus.bin',
+        body: { attachmentId: 'ATT_NAN', size: 'not-a-number' },
+      }),
+    ],
+  });
+  const nanResult = extractAttachmentParts(nanPayload);
+  assert.equal(nanResult.length, 1);
+  assert.equal(nanResult[0].size, 0);
+
+  const negPayload = part({
+    parts: [
+      part({
+        partId: '0',
+        filename: 'neg.bin',
+        body: { attachmentId: 'ATT_NEG', size: -100 },
+      }),
+    ],
+  });
+  const negResult = extractAttachmentParts(negPayload);
+  assert.equal(negResult.length, 1);
+  assert.equal(negResult[0].size, 0);
+});
+
 test('two real attachments in one message are both returned in order', () => {
   const payload = part({
     mimeType: 'multipart/mixed',

@@ -966,42 +966,51 @@ class GmailMultiInboxServer {
 
     const result = await client.downloadByPartId(message_id, part_id, MAX_ATTACHMENT_BYTES);
 
-    if (result.kind === 'not_found') {
-      return textResult(
-        `No attachment with part_id=${part_id} on message ${message_id} in account ${account.id}.`
-      );
+    switch (result.kind) {
+      case 'not_found':
+        return textResult(
+          `No attachment with part_id=${part_id} on message ${message_id} in account ${account.id}.`
+        );
+      case 'too_large':
+        return textResult(
+          [
+            `Attachment ${result.metadata.filename} is ${formatBytes(result.metadata.size)}, which exceeds the ${formatBytes(MAX_ATTACHMENT_BYTES)} cap.`,
+            `Gmail caps outbound attachments at 25 MB; larger payloads cannot be safely returned over MCP stdio.`,
+          ].join('\n')
+        );
+      case 'ok': {
+        const { data, metadata } = result;
+        const text = [
+          `Downloaded ${metadata.filename} (${formatBytes(data.length)}, ${metadata.mimeType})`,
+          `Account: ${account.id} (${account.email})`,
+          `Message ID: ${message_id}`,
+          `Part ID: ${part_id}`,
+        ].join('\n');
+
+        return {
+          content: [
+            { type: 'text', text },
+            {
+              type: 'resource',
+              resource: {
+                uri: `gmail-attachment://${account.id}/${message_id}/${part_id}`,
+                mimeType: metadata.mimeType,
+                blob: data.toString('base64'),
+              },
+            },
+          ],
+        };
+      }
+      default: {
+        // Exhaustiveness guard: if a new union variant is added to
+        // downloadByPartId without a handler here, this line fails to
+        // typecheck, turning a potential silent failure into a compile error.
+        const _exhaustive: never = result;
+        throw new Error(
+          `Unhandled downloadByPartId result kind: ${JSON.stringify(_exhaustive)}`
+        );
+      }
     }
-
-    if (result.kind === 'too_large') {
-      return textResult(
-        [
-          `Attachment ${result.metadata.filename} is ${formatBytes(result.metadata.size)}, which exceeds the ${formatBytes(MAX_ATTACHMENT_BYTES)} cap.`,
-          `Gmail caps outbound attachments at 25 MB; larger payloads cannot be safely returned over MCP stdio.`,
-        ].join('\n')
-      );
-    }
-
-    const { data, metadata } = result;
-    const text = [
-      `Downloaded ${metadata.filename} (${formatBytes(data.length)}, ${metadata.mimeType})`,
-      `Account: ${account.id} (${account.email})`,
-      `Message ID: ${message_id}`,
-      `Part ID: ${part_id}`,
-    ].join('\n');
-
-    return {
-      content: [
-        { type: 'text', text },
-        {
-          type: 'resource',
-          resource: {
-            uri: `gmail-attachment://${account.id}/${message_id}/${part_id}`,
-            mimeType: metadata.mimeType,
-            blob: data.toString('base64'),
-          },
-        },
-      ],
-    };
   }
 
   private async handleGetLabels(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
