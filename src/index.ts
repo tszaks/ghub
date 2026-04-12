@@ -99,6 +99,19 @@ interface OutgoingEmailAttachmentArgs {
   content_type?: string;
 }
 
+interface CreateDraftReplyArgs {
+  account: string;
+  message_id: string;
+  body: string;
+  reply_all?: boolean;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  html?: boolean;
+  attachments?: OutgoingEmailAttachmentArgs[];
+}
+
 interface BeginAuthArgs {
   account_id: string;
   email: string;
@@ -521,6 +534,71 @@ class GmailMultiInboxServer {
           },
         },
         {
+          name: 'create_draft_reply',
+          description:
+            'Create a draft reply to an existing message, preserving the thread. Auto-derives recipients and subject from the original; any supplied field overrides its auto-derived value.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              message_id: {
+                type: 'string',
+                description: 'Gmail message id of the message being replied to.',
+              },
+              body: { type: 'string', description: 'Reply body (no auto-quoting).' },
+              reply_all: {
+                type: 'boolean',
+                description:
+                  'When true, set Cc to original From+To+Cc excluding self, excluding the resolved To, deduped by email address (case-insensitive). Default false.',
+                default: false,
+              },
+              to: {
+                type: 'string',
+                description:
+                  'Optional override for To. Default: original Reply-To if set, else original From.',
+              },
+              cc: {
+                type: 'string',
+                description:
+                  'Optional override for Cc. Default: empty; when reply_all=true, original From+To+Cc minus self, minus resolved To, deduped.',
+              },
+              bcc: { type: 'string', description: 'Optional Bcc (not auto-derived).' },
+              subject: {
+                type: 'string',
+                description:
+                  'Optional subject override. Default: original subject with "Re: " prefix (idempotent).',
+              },
+              html: {
+                type: 'boolean',
+                description: 'Set true to send body as text/html.',
+                default: false,
+              },
+              attachments: {
+                type: 'array',
+                description: 'Optional local file attachments.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    path: { type: 'string', description: 'Absolute or local filesystem path.' },
+                    filename: {
+                      type: 'string',
+                      description: 'Optional override filename shown in Gmail.',
+                    },
+                    content_type: {
+                      type: 'string',
+                      description: 'Optional MIME type override (for example application/pdf).',
+                    },
+                  },
+                  required: ['path'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['account', 'message_id', 'body'],
+            additionalProperties: false,
+          },
+        },
+        {
           name: 'delete_drafts',
           description: 'Permanently delete one or more drafts in one account (account required). Draft IDs are returned by create_draft.',
           inputSchema: {
@@ -665,6 +743,8 @@ class GmailMultiInboxServer {
             return await this.handleDeleteLabel(args);
           case 'create_draft':
             return await this.handleCreateDraft(args);
+          case 'create_draft_reply':
+            return await this.handleCreateDraftReply(args);
           case 'delete_drafts':
             return await this.handleDeleteDrafts(args);
           case 'send_email':
@@ -1045,6 +1125,55 @@ class GmailMultiInboxServer {
         `Account: ${account.id} (${account.email})`,
         `Draft ID: ${result.draftId || '(unknown)'}`,
         `Thread ID: ${result.threadId || '(unknown)'}`,
+        `Attachments: ${args.attachments?.length ?? 0}`,
+      ].join('\n')
+    );
+  }
+
+  private async handleCreateDraftReply(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const args: CreateDraftReplyArgs = {
+      account: valueToString(rawArgs.account),
+      message_id: valueToString(rawArgs.message_id),
+      body: valueToString(rawArgs.body),
+      reply_all: valueToBoolean(rawArgs.reply_all, false),
+      to: valueToString(rawArgs.to, '') || undefined,
+      cc: valueToString(rawArgs.cc, '') || undefined,
+      bcc: valueToString(rawArgs.bcc, '') || undefined,
+      subject: valueToString(rawArgs.subject, '') || undefined,
+      html: valueToBoolean(rawArgs.html, false),
+      attachments: valueToAttachmentArray(rawArgs.attachments),
+    };
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const result = await client.createDraftReply({
+      messageId: args.message_id,
+      body: args.body,
+      replyAll: args.reply_all,
+      to: args.to,
+      cc: args.cc,
+      bcc: args.bcc,
+      subject: args.subject,
+      html: args.html,
+      attachments: args.attachments?.map((attachment) => ({
+        path: attachment.path,
+        filename: attachment.filename,
+        contentType: attachment.content_type,
+      })),
+    });
+
+    return textResult(
+      [
+        'Draft reply created.',
+        `Account: ${account.id} (${account.email})`,
+        `Draft ID: ${result.draftId}`,
+        `Thread ID: ${result.threadId || '(unknown)'}`,
+        `Reply mode: ${args.reply_all ? 'reply-all' : 'direct'}`,
+        `To: ${result.resolvedTo || '(none)'}`,
+        `Cc: ${result.resolvedCc || '(none)'}`,
+        `Subject: ${result.resolvedSubject}`,
         `Attachments: ${args.attachments?.length ?? 0}`,
       ].join('\n')
     );

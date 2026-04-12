@@ -105,11 +105,7 @@ function extractEmailBody(payload?: gmail_v1.Schema$MessagePart): string {
 
 function normalizeOutgoingAddressList(value?: string): string | null {
   if (!value || value.trim() === '') return null;
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .join(', ');
+  return splitAddressList(value).join(', ') || null;
 }
 
 function encodeBase64Url(value: string): string {
@@ -157,6 +153,58 @@ function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n"]/g, ' ').trim();
 }
 
+function extractEmail(addressEntry: string): string {
+  const match = addressEntry.match(/<([^>]+)>/);
+  return (match ? match[1] : addressEntry).trim().toLowerCase();
+}
+
+function splitAddressList(value: string): string[] {
+  if (!value) return [];
+  const out: string[] = [];
+  let buf = '';
+  let inQuotes = false;
+  for (const ch of value) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      buf += ch;
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      const trimmed = buf.trim();
+      if (trimmed) out.push(trimmed);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  const tail = buf.trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+function ensureReplyPrefix(subject: string): string {
+  const trimmed = subject.trim();
+  if (trimmed === '') return 'Re:';
+  if (/^re\s*:/i.test(trimmed)) return trimmed;
+  return `Re: ${trimmed}`;
+}
+
+function wrapMessageId(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) return trimmed;
+  return `<${trimmed}>`;
+}
+
+function normalizeMessageIdList(raw: string): string {
+  if (!raw.trim()) return '';
+  return raw
+    .split(/\s+/)
+    .map(wrapMessageId)
+    .filter((token) => token.length > 0)
+    .join(' ');
+}
+
 async function buildRawEmailMessage(input: {
   to: string;
   subject: string;
@@ -165,6 +213,8 @@ async function buildRawEmailMessage(input: {
   bcc?: string;
   html?: boolean;
   attachments?: EmailAttachment[];
+  inReplyTo?: string;
+  references?: string;
 }): Promise<string> {
   const to = normalizeOutgoingAddressList(input.to);
   if (!to) {
@@ -173,13 +223,18 @@ async function buildRawEmailMessage(input: {
 
   const attachments = (input.attachments ?? []).filter((attachment) => attachment.path.trim() !== '');
 
+  const inReplyTo = input.inReplyTo?.trim();
+  const references = input.references?.trim();
+
   if (attachments.length === 0) {
     const lines: string[] = [
       `To: ${to}`,
       `Subject: ${input.subject}`,
       'MIME-Version: 1.0',
-      `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
     ];
+    if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+    if (references) lines.push(`References: ${references}`);
+    lines.push(`Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`);
 
     const cc = normalizeOutgoingAddressList(input.cc);
     if (cc) lines.push(`Cc: ${cc}`);
@@ -196,6 +251,8 @@ async function buildRawEmailMessage(input: {
     `Subject: ${input.subject}`,
     'MIME-Version: 1.0',
   ];
+  if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+  if (references) lines.push(`References: ${references}`);
 
   const cc = normalizeOutgoingAddressList(input.cc);
   if (cc) lines.push(`Cc: ${cc}`);
@@ -257,6 +314,8 @@ async function createRawEmailMessage(input: {
   bcc?: string;
   html?: boolean;
   attachments?: EmailAttachment[];
+  inReplyTo?: string;
+  references?: string;
 }): Promise<string> {
   return buildRawEmailMessage({
     ...input,
@@ -608,6 +667,148 @@ export class GmailAccountClient {
     return {
       draftId: response.data.id ?? '',
       threadId: response.data.message?.threadId ?? undefined,
+    };
+  }
+
+  private async fetchReplyContext(messageId: string): Promise<{
+    threadId: string;
+    fromHeader: string;
+    replyToHeader: string;
+    toHeader: string;
+    ccHeader: string;
+    subject: string;
+    messageIdHeader: string;
+    referencesHeader: string;
+  }> {
+    if (!messageId || messageId.trim() === '') {
+      throw new Error('message_id is required.');
+    }
+
+    const response = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId.trim(),
+      format: 'metadata',
+      metadataHeaders: [
+        'From',
+        'Reply-To',
+        'To',
+        'Cc',
+        'Subject',
+        'Message-ID',
+        'References',
+      ],
+    });
+
+    const headers = response.data.payload?.headers;
+    if (!headers) {
+      throw new Error(
+        `Gmail returned message ${messageId} with no headers; cannot derive reply context.`
+      );
+    }
+    return {
+      threadId: response.data.threadId ?? '',
+      fromHeader: getHeaderValue(headers, 'From'),
+      replyToHeader: getHeaderValue(headers, 'Reply-To'),
+      toHeader: getHeaderValue(headers, 'To'),
+      ccHeader: getHeaderValue(headers, 'Cc'),
+      subject: getHeaderValue(headers, 'Subject'),
+      messageIdHeader: getHeaderValue(headers, 'Message-ID'),
+      referencesHeader: getHeaderValue(headers, 'References'),
+    };
+  }
+
+  async createDraftReply(input: {
+    messageId: string;
+    body: string;
+    replyAll?: boolean;
+    to?: string;
+    cc?: string;
+    bcc?: string;
+    subject?: string;
+    html?: boolean;
+    attachments?: EmailAttachment[];
+  }): Promise<{
+    draftId: string;
+    threadId?: string;
+    resolvedTo: string;
+    resolvedCc: string;
+    resolvedSubject: string;
+  }> {
+    const original = await this.fetchReplyContext(input.messageId);
+
+    const autoTo = original.replyToHeader.trim() || original.fromHeader;
+    const resolvedTo = input.to ?? autoTo;
+
+    let resolvedCc: string;
+    if (input.cc !== undefined) {
+      resolvedCc = input.cc;
+    } else if (input.replyAll) {
+      const seen = new Set<string>([
+        this.account.email.toLowerCase(),
+        ...splitAddressList(resolvedTo).map(extractEmail),
+      ]);
+      const merged: string[] = [];
+      for (const entry of [
+        ...splitAddressList(original.fromHeader),
+        ...splitAddressList(original.toHeader),
+        ...splitAddressList(original.ccHeader),
+      ]) {
+        const email = extractEmail(entry);
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        merged.push(entry);
+      }
+      resolvedCc = merged.join(', ');
+    } else {
+      resolvedCc = '';
+    }
+
+    const resolvedSubject = input.subject ?? ensureReplyPrefix(original.subject);
+
+    const inReplyTo = wrapMessageId(original.messageIdHeader) || undefined;
+    const existingReferences = normalizeMessageIdList(original.referencesHeader);
+    let references: string | undefined;
+    if (inReplyTo) {
+      references = existingReferences
+        ? `${existingReferences} ${inReplyTo}`
+        : inReplyTo;
+    }
+
+    const raw = await createRawEmailMessage({
+      to: resolvedTo,
+      subject: resolvedSubject,
+      body: input.body,
+      cc: resolvedCc || undefined,
+      bcc: input.bcc,
+      html: input.html,
+      attachments: input.attachments,
+      inReplyTo,
+      references,
+    });
+
+    const response = await this.gmail.users.drafts.create({
+      userId: 'me',
+      requestBody: {
+        message: {
+          raw,
+          threadId: original.threadId || undefined,
+        },
+      },
+    });
+
+    const draftId = response.data.id;
+    if (!draftId) {
+      throw new Error(
+        'Gmail drafts.create returned no draft id; draft state is unknown. Check the account\'s Drafts folder in Gmail before retrying to avoid creating duplicates.'
+      );
+    }
+
+    return {
+      draftId,
+      threadId: response.data.message?.threadId ?? original.threadId ?? undefined,
+      resolvedTo,
+      resolvedCc,
+      resolvedSubject,
     };
   }
 
