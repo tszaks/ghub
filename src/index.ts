@@ -31,9 +31,11 @@ import {
   exchangeCodeForToken,
   generateAuthUrlFromCredentials,
   readCredentialsFile,
+  type AttachmentMetadata,
   type DriveFileSummary,
   type ParsedEmail,
 } from './gmail-client.js';
+import { saveAndExtract, type AttachmentContent } from './attachments.js';
 
 interface ReadEmailsArgs {
   account?: string;
@@ -119,6 +121,17 @@ interface FinishAuthArgs {
   authorization_code: string;
 }
 
+interface GetAttachmentArgs {
+  account: string;
+  email_id: string;
+  attachment_id: string;
+}
+
+interface GetAllAttachmentsArgs {
+  account: string;
+  email_id: string;
+}
+
 function textResult(text: string): CallToolResult {
   return {
     content: [
@@ -197,6 +210,39 @@ function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
       const trimmed = body.length > 600 ? `${body.slice(0, 600)}...` : body;
       lines.push(`**Body**:\n${trimmed}`);
     }
+  }
+
+  if (email.attachments.length > 0) {
+    lines.push(`**Attachments** (${email.attachments.length}):`);
+    for (const att of email.attachments) {
+      lines.push(
+        `  - ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes) — id: ${att.id}`,
+      );
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatAttachmentContent(content: AttachmentContent): string {
+  const lines = [
+    `**Filename**: ${content.filename}`,
+    `**Content-Type**: ${content.contentType}`,
+    `**Size**: ${content.sizeBytes} bytes`,
+    `**Saved to**: ${content.savedPath}`,
+    `**Extraction Method**: ${content.extractionMethod}`,
+  ];
+
+  if (content.textTruncated) {
+    lines.push('**Text Truncated**: true (exceeds 500 KB; saved file is complete)');
+  }
+
+  if (content.extractionError) {
+    lines.push(`**Extraction Error**: ${content.extractionError}`);
+  }
+
+  if (content.text !== null) {
+    lines.push('', '**Extracted Text**:', '', content.text);
   }
 
   return lines.join('\n');
@@ -718,6 +764,38 @@ class GmailMultiInboxServer {
             additionalProperties: false,
           },
         },
+        {
+          name: 'get_attachment',
+          description:
+            'Fetch a single email attachment by id. Saves to ~/Downloads/mcp-attachments/ and returns extracted text for supported formats (PDF, DOCX, XLSX, PPTX, text, images via OCR).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              email_id: { type: 'string', description: 'Gmail message id.' },
+              attachment_id: {
+                type: 'string',
+                description: 'Attachment id from read_emails / get_email_thread metadata.',
+              },
+            },
+            required: ['account', 'email_id', 'attachment_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'get_all_attachments',
+          description:
+            'Fetch every attachment on an email in one call. Saves each to disk and returns extracted text for each.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              email_id: { type: 'string', description: 'Gmail message id.' },
+            },
+            required: ['account', 'email_id'],
+            additionalProperties: false,
+          },
+        },
       ],
     }));
 
@@ -763,6 +841,10 @@ class GmailMultiInboxServer {
             return await this.handleBeginAccountAuth(args);
           case 'finish_account_auth':
             return await this.handleFinishAccountAuth(args);
+          case 'get_attachment':
+            return await this.handleGetAttachment(args);
+          case 'get_all_attachments':
+            return await this.handleGetAllAttachments(args);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -1389,6 +1471,111 @@ class GmailMultiInboxServer {
         'This account is now enabled for Gmail tools and Google Drive metadata search.',
       ].join('\n')
     );
+  }
+
+  private async handleGetAttachment(
+    rawArgs: Record<string, unknown>,
+  ): Promise<CallToolResult> {
+    const args: GetAttachmentArgs = {
+      account: valueToString(rawArgs.account),
+      email_id: valueToString(rawArgs.email_id),
+      attachment_id: valueToString(rawArgs.attachment_id),
+    };
+
+    if (!args.account || !args.email_id || !args.attachment_id) {
+      throw new Error('account, email_id, and attachment_id are required.');
+    }
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const { bytes, metadata } = await client.getAttachment(
+      args.email_id,
+      args.attachment_id,
+    );
+    const content = await saveAndExtract(bytes, metadata);
+
+    return textResult(
+      [
+        '# Gmail Attachment',
+        '',
+        `**Account**: ${account.id} (${account.email})`,
+        `**Message ID**: ${args.email_id}`,
+        `**Attachment ID**: ${args.attachment_id}`,
+        '',
+        formatAttachmentContent(content),
+      ].join('\n'),
+    );
+  }
+
+  private async handleGetAllAttachments(
+    rawArgs: Record<string, unknown>,
+  ): Promise<CallToolResult> {
+    const args: GetAllAttachmentsArgs = {
+      account: valueToString(rawArgs.account),
+      email_id: valueToString(rawArgs.email_id),
+    };
+
+    if (!args.account || !args.email_id) {
+      throw new Error('account and email_id are required.');
+    }
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const list: AttachmentMetadata[] = await client.listAttachments(args.email_id);
+
+    const settled = await Promise.allSettled(
+      list.map(async (meta) => {
+        const { bytes, metadata } = await client.getAttachment(args.email_id, meta.id);
+        return saveAndExtract(bytes, metadata);
+      }),
+    );
+
+    const attachments: AttachmentContent[] = [];
+    const errors: Array<{ attachment_id: string; error: string }> = [];
+
+    settled.forEach((result, index) => {
+      const originalId = list[index]?.id ?? '(unknown)';
+      if (result.status === 'fulfilled') {
+        attachments.push(result.value);
+      } else {
+        errors.push({
+          attachment_id: originalId,
+          error:
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason),
+        });
+      }
+    });
+
+    const lines = [
+      '# Gmail Attachments',
+      '',
+      `**Account**: ${account.id} (${account.email})`,
+      `**Message ID**: ${args.email_id}`,
+      `**Attachments**: ${attachments.length}`,
+      `**Errors**: ${errors.length}`,
+      '',
+    ];
+
+    attachments.forEach((att, index) => {
+      lines.push(`## ${index + 1}. ${att.filename}`);
+      lines.push(formatAttachmentContent(att));
+      lines.push('');
+    });
+
+    if (errors.length > 0) {
+      lines.push('## Errors');
+      errors.forEach((err) => {
+        lines.push(`- ${err.attachment_id}: ${err.error}`);
+      });
+    }
+
+    return textResult(lines.join('\n'));
   }
 
   async run(): Promise<void> {
