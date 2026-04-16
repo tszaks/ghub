@@ -6,3 +6,4 @@ dist/
 *.json.bak
 credentials.json
 token.json
+vendor/ocr/ocr-bin

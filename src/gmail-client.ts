@@ -14,6 +14,14 @@ export const DRIVE_METADATA_SCOPE =
 
 export const GOOGLE_ACCOUNT_SCOPES = [...GMAIL_SCOPES, DRIVE_METADATA_SCOPE] as const;
 
+export interface AttachmentMetadata {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  isInline: boolean;
+}
+
 export interface ParsedEmail {
   id: string;
   threadId: string;
@@ -25,6 +33,7 @@ export interface ParsedEmail {
   internalDate: number;
   body?: string;
   labels: string[];
+  attachments: AttachmentMetadata[];
   accountId: string;
   accountEmail: string;
 }
@@ -66,6 +75,69 @@ function decodeBase64Url(value: string): string {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
   return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+function decodeBase64UrlBuffer(value: string): Buffer {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+  return Buffer.from(padded, 'base64');
+}
+
+function isInlineDisposition(
+  headers: gmail_v1.Schema$MessagePartHeader[] | undefined,
+): boolean {
+  if (!headers) return false;
+  const disposition = headers.find((h) => h.name?.toLowerCase() === 'content-disposition');
+  return Boolean(disposition?.value?.trim().toLowerCase().startsWith('inline'));
+}
+
+function extractAttachmentsMetadata(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+): AttachmentMetadata[] {
+  if (!payload) return [];
+
+  const out: AttachmentMetadata[] = [];
+  const consider = (part: gmail_v1.Schema$MessagePart) => {
+    if (part.filename && part.body?.attachmentId) {
+      out.push({
+        id: part.body.attachmentId,
+        filename: part.filename,
+        contentType: part.mimeType ?? 'application/octet-stream',
+        sizeBytes: Number(part.body.size ?? 0),
+        isInline: isInlineDisposition(part.headers),
+      });
+    }
+  };
+
+  consider(payload);
+
+  const stack: gmail_v1.Schema$MessagePart[] = payload.parts ? [...payload.parts] : [];
+  while (stack.length > 0) {
+    const part = stack.shift();
+    if (!part) continue;
+    consider(part);
+    if (part.parts?.length) stack.push(...part.parts);
+  }
+
+  return out;
+}
+
+function findAttachmentPart(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+  attachmentId: string,
+): gmail_v1.Schema$MessagePart | null {
+  if (!payload) return null;
+  if (payload.body?.attachmentId === attachmentId) return payload;
+
+  const stack: gmail_v1.Schema$MessagePart[] = payload.parts ? [...payload.parts] : [];
+  while (stack.length > 0) {
+    const part = stack.shift();
+    if (!part) continue;
+    if (part.body?.attachmentId === attachmentId) return part;
+    if (part.parts?.length) stack.push(...part.parts);
+  }
+
+  return null;
 }
 
 function stripHtmlTags(input: string): string {
@@ -544,8 +616,7 @@ export class GmailAccountClient {
         this.gmail.users.messages.get({
           userId: 'me',
           id: messageId,
-          format: includeBody ? 'full' : 'metadata',
-          metadataHeaders: includeBody ? undefined : ['From', 'To', 'Subject', 'Date'],
+          format: 'full',
         })
       )
     );
@@ -553,6 +624,69 @@ export class GmailAccountClient {
     return fullMessages
       .map((response) => this.parseMessage(response.data, includeBody))
       .sort((a, b) => b.internalDate - a.internalDate);
+  }
+
+  async listAttachments(messageId: string): Promise<AttachmentMetadata[]> {
+    if (!messageId || messageId.trim() === '') {
+      throw new Error('message_id is required.');
+    }
+
+    const response = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+
+    return extractAttachmentsMetadata(response.data.payload).filter((a) => !a.isInline);
+  }
+
+  async getAttachment(
+    messageId: string,
+    attachmentId: string,
+  ): Promise<{ bytes: Buffer; metadata: AttachmentMetadata }> {
+    if (!messageId || messageId.trim() === '') {
+      throw new Error('message_id is required.');
+    }
+    if (!attachmentId || attachmentId.trim() === '') {
+      throw new Error('attachment_id is required.');
+    }
+
+    const messageResponse = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+
+    const part = findAttachmentPart(messageResponse.data.payload, attachmentId);
+    if (!part || !part.filename) {
+      throw new Error(
+        `Attachment ${attachmentId} not found on message ${messageId}.`,
+      );
+    }
+
+    const attachmentResponse = await this.gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+
+    const data = attachmentResponse.data.data;
+    if (!data) {
+      throw new Error(`Attachment ${attachmentId} has no data payload.`);
+    }
+
+    const bytes = decodeBase64UrlBuffer(data);
+
+    return {
+      bytes,
+      metadata: {
+        id: attachmentId,
+        filename: part.filename,
+        contentType: part.mimeType ?? 'application/octet-stream',
+        sizeBytes: Number(part.body?.size ?? bytes.length),
+        isInline: isInlineDisposition(part.headers),
+      },
+    };
   }
 
   async getThread(threadId: string): Promise<ParsedThread> {
@@ -772,6 +906,9 @@ export class GmailAccountClient {
   private parseMessage(message: gmail_v1.Schema$Message, includeBody: boolean): ParsedEmail {
     const headers = message.payload?.headers;
     const internalDate = Number(message.internalDate ?? 0);
+    const attachments = extractAttachmentsMetadata(message.payload).filter(
+      (a) => !a.isInline,
+    );
 
     return {
       id: message.id ?? '',
@@ -784,6 +921,7 @@ export class GmailAccountClient {
       internalDate: Number.isFinite(internalDate) ? internalDate : 0,
       body: includeBody ? extractEmailBody(message.payload) : undefined,
       labels: message.labelIds ?? [],
+      attachments,
       accountId: this.account.id,
       accountEmail: this.account.email,
     };

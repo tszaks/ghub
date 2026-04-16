@@ -12,7 +12,8 @@
     "dev": "tsc -w -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "postinstall": "bash scripts/build-ocr.sh"
   },
   "keywords": [
     "mcp",
@@ -29,7 +30,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
     "google-auth-library": "^9.15.1",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "mammoth": "^1.9.0",
+    "officeparser": "^5.0.0",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
