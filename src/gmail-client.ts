@@ -841,6 +841,118 @@ export class GmailAccountClient {
     });
   }
 
+  async createFilter(
+    criteria: gmail_v1.Schema$FilterCriteria,
+    action: gmail_v1.Schema$FilterAction
+  ): Promise<gmail_v1.Schema$Filter> {
+    const response = await this.gmail.users.settings.filters.create({
+      userId: 'me',
+      requestBody: { criteria, action },
+    });
+    return response.data;
+  }
+
+  async listFilters(): Promise<gmail_v1.Schema$Filter[]> {
+    const response = await this.gmail.users.settings.filters.list({ userId: 'me' });
+    return response.data.filter ?? [];
+  }
+
+  async deleteFilter(filterId: string): Promise<void> {
+    if (!filterId || filterId.trim() === '') {
+      throw new Error('filter_id is required.');
+    }
+    await this.gmail.users.settings.filters.delete({
+      userId: 'me',
+      id: filterId.trim(),
+    });
+  }
+
+  async createBlockFilter(
+    sender: string,
+    action: 'trash' | 'archive' | 'spam'
+  ): Promise<gmail_v1.Schema$Filter> {
+    const trimmed = sender.trim();
+    if (!trimmed) throw new Error('sender is required.');
+
+    const criteria: gmail_v1.Schema$FilterCriteria = { from: trimmed };
+    const filterAction: gmail_v1.Schema$FilterAction =
+      action === 'archive'
+        ? { removeLabelIds: ['INBOX'] }
+        : action === 'spam'
+          ? { addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] }
+          : { addLabelIds: ['TRASH'], removeLabelIds: ['INBOX', 'UNREAD'] };
+
+    return this.createFilter(criteria, filterAction);
+  }
+
+  async modifyThread(
+    threadId: string,
+    modifications: { addLabelIds?: string[]; removeLabelIds?: string[] }
+  ): Promise<void> {
+    if (!threadId || threadId.trim() === '') {
+      throw new Error('thread_id is required.');
+    }
+    const addLabelIds = (modifications.addLabelIds ?? [])
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const removeLabelIds = (modifications.removeLabelIds ?? [])
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (addLabelIds.length === 0 && removeLabelIds.length === 0) {
+      throw new Error('modifyThread requires at least one label add or remove.');
+    }
+
+    await this.gmail.users.threads.modify({
+      userId: 'me',
+      id: threadId.trim(),
+      requestBody: { addLabelIds, removeLabelIds },
+    });
+  }
+
+  async getThreadSubject(threadId: string): Promise<string> {
+    if (!threadId || threadId.trim() === '') {
+      throw new Error('thread_id is required.');
+    }
+
+    const response = await this.gmail.users.threads.get({
+      userId: 'me',
+      id: threadId.trim(),
+      format: 'metadata',
+      metadataHeaders: ['Subject'],
+    });
+
+    const firstMessage = response.data.messages?.[0];
+    const raw = getHeaderValue(firstMessage?.payload?.headers, 'Subject');
+    return raw.replace(/^(?:\s*(?:re|fwd?|aw)\s*:\s*)+/i, '').trim();
+  }
+
+  async getMessageHeaders(
+    messageId: string,
+    headerNames: string[]
+  ): Promise<Record<string, string>> {
+    if (!messageId || messageId.trim() === '') {
+      throw new Error('message_id is required.');
+    }
+    const names = headerNames.map((name) => name.trim()).filter(Boolean);
+    if (names.length === 0) {
+      throw new Error('headerNames must include at least one value.');
+    }
+
+    const response = await this.gmail.users.messages.get({
+      userId: 'me',
+      id: messageId.trim(),
+      format: 'metadata',
+      metadataHeaders: names,
+    });
+
+    const headers = response.data.payload?.headers ?? [];
+    const result: Record<string, string> = {};
+    for (const name of names) {
+      result[name] = getHeaderValue(headers, name);
+    }
+    return result;
+  }
+
   async createDraft(input: {
     to: string;
     subject: string;
