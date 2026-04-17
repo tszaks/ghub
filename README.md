@@ -24,6 +24,7 @@ Unlike existing Gmail MCP servers, this implementation offers:
 - [Installation](#installation)
 - [Google Cloud Setup](#google-cloud-setup)
 - [Configuration](#configuration)
+- [Railway / SSE Deployment](#railway--sse-deployment)
 - [OAuth Onboarding](#oauth-onboarding)
 - [Usage Examples](#usage-examples)
 - [API Reference](#api-reference)
@@ -148,12 +149,14 @@ To use a custom directory for storing account data:
         "/path/to/gmail-multi-inbox-mcp/dist/index.js"
       ],
       "env": {
-        "GMAIL_MCP_CONFIG_DIR": "/custom/path/.gmail-multi-mcp"
+        "GMAILMCPCONFIG_DIR": "/custom/path/.gmail-multi-mcp"
       }
     }
   }
 }
 ```
+
+The server also accepts the legacy `GMAIL_MCP_CONFIG_DIR` env var.
 
 ### Directory Structure
 
@@ -198,6 +201,17 @@ Default configuration location: `~/.gmail-multi-mcp/`
   ]
 }
 ```
+
+## Railway / SSE Deployment
+
+This server can run as either stdio MCP or an SSE-backed HTTP server.
+
+- Set `MCP_TRANSPORT=sse` to force HTTP/SSE mode.
+- If `PORT` is present, the server automatically switches to SSE mode.
+- The SSE endpoint is served at `/sse` and message posts are accepted at `/messages`.
+- Configuration still respects `GMAILMCPCONFIG_DIR` and `GMAIL_MCP_CONFIG_DIR`.
+
+For Railway, point the start command at `npm start` or `node dist/index.js` and let Railway provide `PORT`.
 
 ## OAuth Onboarding
 
