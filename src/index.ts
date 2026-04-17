@@ -132,6 +132,35 @@ interface GetAllAttachmentsArgs {
   email_id: string;
 }
 
+type BlockAction = 'trash' | 'archive' | 'spam';
+
+interface BlockSenderArgs {
+  account: string;
+  sender: string;
+  action?: BlockAction;
+  also_trash_existing?: boolean;
+}
+
+interface UnblockSenderArgs {
+  account: string;
+  filter_id?: string;
+  sender?: string;
+}
+
+interface UnsubscribeArgs {
+  account: string;
+  message_id: string;
+  dry_run?: boolean;
+}
+
+type MuteScope = 'subject' | 'thread_only';
+
+interface MuteThreadArgs {
+  account: string;
+  thread_id: string;
+  scope?: MuteScope;
+}
+
 function textResult(text: string): CallToolResult {
   return {
     content: [
@@ -185,6 +214,47 @@ function valueToAttachmentArray(value: unknown): OutgoingEmailAttachmentArgs[] {
 
 function emailDateForSort(email: ParsedEmail): number {
   return Number.isFinite(email.internalDate) ? email.internalDate : 0;
+}
+
+function parseListUnsubscribeHeader(raw: string): string[] {
+  const urls: string[] = [];
+  for (const match of raw.matchAll(/<([^>]+)>/g)) {
+    const url = match[1]?.trim();
+    if (url) urls.push(url);
+  }
+  return urls;
+}
+
+function parseMailto(mailtoUrl: string): { to: string; subject: string; body: string } {
+  const stripped = mailtoUrl.replace(/^mailto:/i, '');
+  const [addressPart, queryPart = ''] = stripped.split('?', 2);
+  const to = (addressPart ?? '').trim();
+  const params = new URLSearchParams(queryPart);
+  const subject = (params.get('subject') ?? 'unsubscribe').trim() || 'unsubscribe';
+  const body = (params.get('body') ?? '').trim();
+  return { to, subject, body };
+}
+
+const GENERIC_SUBJECTS = new Set([
+  'hi',
+  'hey',
+  'hello',
+  'test',
+  'update',
+  'updates',
+  'news',
+  'newsletter',
+  '(no subject)',
+  'notification',
+  'notifications',
+  'alert',
+  'alerts',
+]);
+
+function isGenericSubject(subject: string): boolean {
+  const normalized = subject.trim().toLowerCase();
+  if (normalized.length < 4) return true;
+  return GENERIC_SUBJECTS.has(normalized);
 }
 
 function driveFileDateForSort(file: DriveFileSummary): number {
@@ -613,6 +683,119 @@ class GmailMultiInboxServer {
           },
         },
         {
+          name: 'block_sender',
+          description:
+            'Block a sender by creating a Gmail filter (same mechanism as Gmail\'s native "Block" button). Optionally also trashes existing mail from that sender.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              sender: {
+                type: 'string',
+                description:
+                  'Email address (e.g. "spam@foo.com"), domain ("@foo.com"), or Gmail search fragment ("from:x subject:promo").',
+              },
+              action: {
+                type: 'string',
+                enum: ['trash', 'archive', 'spam'],
+                description:
+                  'What to do with matching mail. "trash" (default) mirrors Gmail\'s Block button.',
+                default: 'trash',
+              },
+              also_trash_existing: {
+                type: 'boolean',
+                description:
+                  'If true (default), retroactively trashes up to 100 existing messages from this sender.',
+                default: true,
+              },
+            },
+            required: ['account', 'sender'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'list_blocked_senders',
+          description:
+            'List all Gmail filters for an account. Use to find filter_id for unblock_sender, or to audit what is being auto-trashed/archived/spammed.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+            },
+            required: ['account'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'unblock_sender',
+          description:
+            'Remove a Gmail filter. Specify either filter_id (exact match) or sender (matches filters whose "from" criteria equals this value).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              filter_id: {
+                type: 'string',
+                description: 'Filter id from list_blocked_senders. Prefer this when known.',
+              },
+              sender: {
+                type: 'string',
+                description:
+                  'Sender string to match against filters\' from criteria. Used when filter_id is not provided.',
+              },
+            },
+            required: ['account'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'unsubscribe_from_email',
+          description:
+            'Unsubscribe from a mailing list by invoking the List-Unsubscribe header (RFC 2369/8058). Same mechanism as Gmail\'s native "Unsubscribe" button. Falls back to mailto:. Returns method used.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              message_id: {
+                type: 'string',
+                description: 'Gmail message id of a message from the sender to unsubscribe from.',
+              },
+              dry_run: {
+                type: 'boolean',
+                description:
+                  'If true, report what method would be used without executing the unsubscribe. Default false.',
+                default: false,
+              },
+            },
+            required: ['account', 'message_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'mute_thread',
+          description:
+            'Mute a conversation: archives the thread now and (with scope="subject") installs a subject-based filter so future replies auto-archive. Approximates Gmail\'s client-side mute.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              thread_id: {
+                type: 'string',
+                description: 'Thread id (from search_emails / read_emails / get_email_thread).',
+              },
+              scope: {
+                type: 'string',
+                enum: ['subject', 'thread_only'],
+                description:
+                  '"subject" (default) archives now + auto-archives future replies with the same subject. "thread_only" just archives this thread without creating a filter.',
+                default: 'subject',
+              },
+            },
+            required: ['account', 'thread_id'],
+            additionalProperties: false,
+          },
+        },
+        {
           name: 'create_draft',
           description: 'Create a draft email in one account (account required).',
           inputSchema: {
@@ -831,6 +1014,16 @@ class GmailMultiInboxServer {
             return await this.handleCreateLabel(args);
           case 'delete_label':
             return await this.handleDeleteLabel(args);
+          case 'block_sender':
+            return await this.handleBlockSender(args);
+          case 'list_blocked_senders':
+            return await this.handleListBlockedSenders(args);
+          case 'unblock_sender':
+            return await this.handleUnblockSender(args);
+          case 'unsubscribe_from_email':
+            return await this.handleUnsubscribeFromEmail(args);
+          case 'mute_thread':
+            return await this.handleMuteThread(args);
           case 'create_draft':
             return await this.handleCreateDraft(args);
           case 'delete_drafts':
@@ -1236,6 +1429,328 @@ class GmailMultiInboxServer {
     await client.deleteLabel(args.label_id);
 
     return textResult(`✅ Deleted label ${args.label_id} in account ${account.id}.`);
+  }
+
+  private async handleBlockSender(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const rawAction = valueToString(rawArgs.action, 'trash').trim().toLowerCase();
+    const action: BlockAction =
+      rawAction === 'archive' || rawAction === 'spam' ? rawAction : 'trash';
+
+    const args: BlockSenderArgs = {
+      account: valueToString(rawArgs.account),
+      sender: valueToString(rawArgs.sender).trim(),
+      action,
+      also_trash_existing: valueToBoolean(rawArgs.also_trash_existing, true),
+    };
+
+    if (!args.sender) throw new Error('sender is required.');
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const filter = await client.createBlockFilter(args.sender, action);
+
+    let sweptCount = 0;
+    let sweepError: string | null = null;
+    if (args.also_trash_existing && action !== 'archive') {
+      try {
+        const existing = await client.searchEmails(`from:${args.sender}`, 100);
+        if (existing.length > 0) {
+          sweptCount = await client.trashEmails(existing.map((email) => email.id));
+        }
+      } catch (error) {
+        sweepError = (error as Error).message;
+      }
+    }
+
+    const lines = [
+      `✅ Blocked \`${args.sender}\` in account ${account.id}.`,
+      `- Action: ${action}`,
+      `- Filter id: ${filter.id ?? '(unknown)'}`,
+    ];
+    if (args.also_trash_existing && action !== 'archive') {
+      lines.push(`- Existing messages trashed: ${sweptCount}`);
+      if (sweepError) {
+        lines.push(`- Sweep warning: ${sweepError}`);
+      }
+    }
+    if (action === 'archive' && args.also_trash_existing) {
+      lines.push('- Note: `also_trash_existing` ignored for `archive` action (would be destructive).');
+    }
+
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleListBlockedSenders(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const args = { account: valueToString(rawArgs.account) };
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const filters = await client.listFilters();
+
+    if (filters.length === 0) {
+      return textResult(`# Filters for account ${account.id}\n\nNo filters configured.`);
+    }
+
+    const lines: string[] = [`# Filters for account ${account.id}`, '', `**Total**: ${filters.length}`, ''];
+
+    filters.forEach((filter, index) => {
+      const c = filter.criteria ?? {};
+      const a = filter.action ?? {};
+      const criteriaParts: string[] = [];
+      if (c.from) criteriaParts.push(`from: ${c.from}`);
+      if (c.to) criteriaParts.push(`to: ${c.to}`);
+      if (c.subject) criteriaParts.push(`subject: ${c.subject}`);
+      if (c.query) criteriaParts.push(`query: ${c.query}`);
+      if (c.hasAttachment) criteriaParts.push('hasAttachment: true');
+
+      const actionParts: string[] = [];
+      if (a.addLabelIds?.length) actionParts.push(`add: ${a.addLabelIds.join(', ')}`);
+      if (a.removeLabelIds?.length) actionParts.push(`remove: ${a.removeLabelIds.join(', ')}`);
+      if (a.forward) actionParts.push(`forward: ${a.forward}`);
+
+      lines.push(`## ${index + 1}. Filter \`${filter.id ?? '(no id)'}\``);
+      lines.push(`- Criteria: ${criteriaParts.length > 0 ? criteriaParts.join(' | ') : '(none)'}`);
+      lines.push(`- Action: ${actionParts.length > 0 ? actionParts.join(' | ') : '(none)'}`);
+      lines.push('');
+    });
+
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleUnblockSender(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const args: UnblockSenderArgs = {
+      account: valueToString(rawArgs.account),
+      filter_id: valueToString(rawArgs.filter_id, '').trim() || undefined,
+      sender: valueToString(rawArgs.sender, '').trim() || undefined,
+    };
+
+    if (!args.filter_id && !args.sender) {
+      throw new Error('Provide either filter_id or sender.');
+    }
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    if (args.filter_id) {
+      await client.deleteFilter(args.filter_id);
+      return textResult(`✅ Deleted filter ${args.filter_id} in account ${account.id}.`);
+    }
+
+    const senderNeedle = args.sender!;
+    const filters = await client.listFilters();
+    const matches = filters.filter((f) => (f.criteria?.from ?? '').trim() === senderNeedle);
+
+    if (matches.length === 0) {
+      return textResult(
+        `No filters in account ${account.id} matched sender \`${senderNeedle}\`. Use list_blocked_senders to inspect.`
+      );
+    }
+
+    const deletedIds: string[] = [];
+    for (const match of matches) {
+      if (!match.id) continue;
+      await client.deleteFilter(match.id);
+      deletedIds.push(match.id);
+    }
+
+    return textResult(
+      `✅ Deleted ${deletedIds.length} filter(s) matching \`${senderNeedle}\` in account ${account.id}: ${deletedIds.join(', ')}.`
+    );
+  }
+
+  private async handleUnsubscribeFromEmail(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const args: UnsubscribeArgs = {
+      account: valueToString(rawArgs.account),
+      message_id: valueToString(rawArgs.message_id).trim(),
+      dry_run: valueToBoolean(rawArgs.dry_run, false),
+    };
+
+    if (!args.message_id) throw new Error('message_id is required.');
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    const headers = await client.getMessageHeaders(args.message_id, [
+      'List-Unsubscribe',
+      'List-Unsubscribe-Post',
+    ]);
+
+    const listUnsubscribe = headers['List-Unsubscribe']?.trim() ?? '';
+    const listUnsubscribePost = headers['List-Unsubscribe-Post']?.trim() ?? '';
+
+    if (!listUnsubscribe) {
+      return textResult(
+        [
+          `# Unsubscribe: unavailable`,
+          ``,
+          `Message ${args.message_id} has no \`List-Unsubscribe\` header. Nothing to unsubscribe from.`,
+        ].join('\n')
+      );
+    }
+
+    const urls = parseListUnsubscribeHeader(listUnsubscribe);
+    const httpsUrl = urls.find((u) => u.startsWith('https://') || u.startsWith('http://'));
+    const mailtoUrl = urls.find((u) => u.startsWith('mailto:'));
+
+    const isOneClick = /List-Unsubscribe\s*=\s*One-Click/i.test(listUnsubscribePost);
+
+    if (httpsUrl && isOneClick) {
+      if (args.dry_run) {
+        return textResult(
+          `[dry_run] Would POST one-click unsubscribe to ${httpsUrl}`
+        );
+      }
+      try {
+        const response = await fetch(httpsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'List-Unsubscribe=One-Click',
+        });
+        const success = response.status >= 200 && response.status < 300;
+        return textResult(
+          [
+            `# Unsubscribe: ${success ? '✅ success' : '⚠️ non-2xx response'}`,
+            ``,
+            `- Method: http_one_click (RFC 8058)`,
+            `- URL: ${httpsUrl}`,
+            `- HTTP status: ${response.status} ${response.statusText}`,
+          ].join('\n')
+        );
+      } catch (error) {
+        return textResult(
+          [
+            `# Unsubscribe: ⚠️ network error`,
+            ``,
+            `- Method: http_one_click`,
+            `- URL: ${httpsUrl}`,
+            `- Error: ${(error as Error).message}`,
+          ].join('\n')
+        );
+      }
+    }
+
+    if (mailtoUrl) {
+      const mailto = parseMailto(mailtoUrl);
+      if (args.dry_run) {
+        return textResult(
+          `[dry_run] Would send mailto unsubscribe to ${mailto.to} (subject: "${mailto.subject}").`
+        );
+      }
+      try {
+        const result = await client.sendEmail({
+          to: mailto.to,
+          subject: mailto.subject,
+          body: mailto.body,
+          html: false,
+        });
+        return textResult(
+          [
+            `# Unsubscribe: ✅ sent`,
+            ``,
+            `- Method: mailto`,
+            `- To: ${mailto.to}`,
+            `- Subject: ${mailto.subject}`,
+            `- Sent message id: ${result.messageId}`,
+          ].join('\n')
+        );
+      } catch (error) {
+        return textResult(
+          [
+            `# Unsubscribe: ⚠️ mailto send failed`,
+            ``,
+            `- To: ${mailto.to}`,
+            `- Error: ${(error as Error).message}`,
+          ].join('\n')
+        );
+      }
+    }
+
+    if (httpsUrl) {
+      return textResult(
+        [
+          `# Unsubscribe: manual confirmation required`,
+          ``,
+          `- Method: http_manual (no one-click header)`,
+          `- URL: ${httpsUrl}`,
+          ``,
+          `This sender provides an HTTPS unsubscribe URL but did not opt in to RFC 8058 one-click. Not auto-clicking (some senders count the click as consent). Open the URL manually if you trust it.`,
+        ].join('\n')
+      );
+    }
+
+    return textResult(
+      [
+        `# Unsubscribe: unavailable`,
+        ``,
+        `Header present but no parseable URL found: \`${listUnsubscribe}\``,
+      ].join('\n')
+    );
+  }
+
+  private async handleMuteThread(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const rawScope = valueToString(rawArgs.scope, 'subject').trim().toLowerCase();
+    const scope: MuteScope = rawScope === 'thread_only' ? 'thread_only' : 'subject';
+
+    const args: MuteThreadArgs = {
+      account: valueToString(rawArgs.account),
+      thread_id: valueToString(rawArgs.thread_id).trim(),
+      scope,
+    };
+
+    if (!args.thread_id) throw new Error('thread_id is required.');
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, args.account);
+    const client = await this.getClientForAccount(account);
+
+    await client.modifyThread(args.thread_id, {
+      removeLabelIds: ['INBOX'],
+    });
+
+    const result: {
+      thread_archived: boolean;
+      filter_created: boolean;
+      filter_id?: string;
+      subject_matched?: string;
+      warning?: string;
+    } = {
+      thread_archived: true,
+      filter_created: false,
+    };
+
+    if (scope === 'subject') {
+      const subject = await client.getThreadSubject(args.thread_id);
+      const cleaned = subject.trim();
+
+      if (isGenericSubject(cleaned)) {
+        result.warning = `Subject "${cleaned}" is too generic; skipped filter to avoid collateral muting. Thread was archived only.`;
+      } else {
+        const filter = await client.createFilter(
+          { subject: cleaned },
+          { removeLabelIds: ['INBOX'] }
+        );
+        result.filter_created = true;
+        result.filter_id = filter.id ?? undefined;
+        result.subject_matched = cleaned;
+      }
+    }
+
+    const lines = [
+      `✅ Muted thread ${args.thread_id} in account ${account.id}.`,
+      `- Thread archived: yes`,
+      `- Filter created: ${result.filter_created ? 'yes' : 'no'}`,
+    ];
+    if (result.filter_id) lines.push(`- Filter id: ${result.filter_id}`);
+    if (result.subject_matched) lines.push(`- Subject matched: "${result.subject_matched}"`);
+    if (result.warning) lines.push(`- Warning: ${result.warning}`);
+
+    return textResult(lines.join('\n'));
   }
 
   private async handleCreateDraft(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
