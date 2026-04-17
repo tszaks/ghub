@@ -35,7 +35,7 @@ function expandHome(inputPath: string): string {
 }
 
 export function getConfigRoot(): string {
-  const envPath = process.env.GMAIL_MCP_CONFIG_DIR?.trim();
+  const envPath = process.env.GMAILMCPCONFIG_DIR?.trim() ?? process.env.GMAIL_MCP_CONFIG_DIR?.trim();
   if (!envPath) return DEFAULT_CONFIG_DIR;
   return path.resolve(expandHome(envPath));
 }

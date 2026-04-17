@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { createServer } from 'node:http';
 import { promises as fs } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
@@ -426,11 +428,6 @@ class GmailMultiInboxServer {
     this.server.onerror = (error) => {
       console.error('[gmail-multi-inbox-mcp] MCP error:', error);
     };
-
-    process.on('SIGINT', async () => {
-      await this.server.close();
-      process.exit(0);
-    });
   }
 
   private setupHandlers(): void {
@@ -2093,16 +2090,128 @@ class GmailMultiInboxServer {
     return textResult(lines.join('\n'));
   }
 
-  async run(): Promise<void> {
+  async connectTransport(transport: StdioServerTransport | SSEServerTransport): Promise<void> {
     await ensureConfigLayout(this.configRoot);
-    const transport = new StdioServerTransport();
     await this.server.connect(transport);
+  }
+
+  async close(): Promise<void> {
+    await this.server.close();
+  }
+
+  async run(): Promise<void> {
+    const transport = new StdioServerTransport();
+    await this.connectTransport(transport);
     console.error(`[gmail-multi-inbox-mcp] Running on stdio. Config root: ${this.configRoot}`);
   }
 }
 
-const server = new GmailMultiInboxServer();
-server.run().catch((error) => {
+
+function resolveTransportMode(): 'stdio' | 'sse' {
+  const explicit = process.env.MCP_TRANSPORT?.trim().toLowerCase();
+  if (explicit === 'stdio' || explicit === 'sse') return explicit;
+  if (process.env.PORT?.trim()) return 'sse';
+  return 'stdio';
+}
+
+async function runSseServer(): Promise<void> {
+  const port = Number.parseInt(process.env.PORT ?? '3000', 10);
+  const host = process.env.HOST?.trim() || '0.0.0.0';
+  const sessions = new Map<string, { app: GmailMultiInboxServer; transport: SSEServerTransport }>();
+
+  const closeAll = async (): Promise<void> => {
+    const entries = [...sessions.values()];
+    sessions.clear();
+    await Promise.allSettled(entries.map(async ({ app, transport }) => {
+      await Promise.allSettled([transport.close(), app.close()]);
+    }));
+  };
+
+  const httpServer = createServer(async (req, res) => {
+    try {
+      const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? host}`);
+
+      if (req.method === 'GET' && requestUrl.pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('gmail-multi-inbox-mcp SSE server');
+        return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/sse') {
+        const app = new GmailMultiInboxServer();
+        const transport = new SSEServerTransport('/messages', res);
+        const sessionId = transport.sessionId;
+        sessions.set(sessionId, { app, transport });
+
+        transport.onclose = () => {
+          sessions.delete(sessionId);
+        };
+
+        try {
+          await app.connectTransport(transport);
+          console.error(`[gmail-multi-inbox-mcp] Running on SSE. Session: ${sessionId}. Port: ${port}`);
+        } catch (error) {
+          sessions.delete(sessionId);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          }
+          res.end(error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/messages') {
+        const sessionId = requestUrl.searchParams.get('sessionId') ?? '';
+        const session = sessions.get(sessionId);
+        if (!session) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Unknown SSE session');
+          return;
+        }
+
+        await session.transport.handlePostMessage(req, res);
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found');
+    } catch (error) {
+      console.error('[gmail-multi-inbox-mcp] SSE server error:', error);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      }
+      res.end(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(port, host, () => resolve());
+  });
+
+  console.error(`[gmail-multi-inbox-mcp] Running on SSE at http://${host}:${port}. Config dir uses GMAILMCPCONFIG_DIR or GMAIL_MCP_CONFIG_DIR.`);
+
+  process.on('SIGINT', async () => {
+    await closeAll();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    process.exit(0);
+  });
+}
+
+async function main(): Promise<void> {
+  if (resolveTransportMode() === 'sse') {
+    await runSseServer();
+    return;
+  }
+
+  const server = new GmailMultiInboxServer();
+  process.on('SIGINT', async () => {
+    await server.close();
+    process.exit(0);
+  });
+  await server.run();
+}
+
+main().catch((error) => {
   console.error('[gmail-multi-inbox-mcp] Fatal error:', error);
   process.exit(1);
 });
