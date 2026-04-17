@@ -2115,7 +2115,7 @@ function resolveTransportMode(): 'stdio' | 'sse' {
 }
 
 async function runSseServer(): Promise<void> {
-  const port = Number.parseInt(process.env.PORT ?? '3000', 10);
+  const port = Number.parseInt(process.env.PORT ?? process.env.RAILWAY_PORT ?? '3000', 10);
   if (!Number.isFinite(port) || port <= 0) {
     throw new Error('Invalid PORT value: ' + (process.env.PORT ?? '(missing)'));
   }
@@ -2134,6 +2134,11 @@ async function runSseServer(): Promise<void> {
 
   app.get('/', (_req: Request, res: Response) => {
     res.status(200).type('text/plain').send('gmail-multi-inbox-mcp SSE server');
+  });
+
+  app.use((req: Request, _res: Response, next) => {
+    console.error('[gmail-multi-inbox-mcp] HTTP ' + req.method + ' ' + req.path);
+    next();
   });
 
   app.get('/sse', async (_req: Request, res: Response) => {
@@ -2169,8 +2174,8 @@ async function runSseServer(): Promise<void> {
     await session.transport.handlePostMessage(req, res);
   });
 
-  const httpServer = app.listen(port, host, () => {
-    console.error('[gmail-multi-inbox-mcp] Running on SSE at http://' + host + ':' + port + '. Routes: GET /sse, POST /messages');
+  const httpServer = app.listen(port, () => {
+    console.error('[gmail-multi-inbox-mcp] Running on SSE at port ' + port + '. Routes: GET /sse, POST /messages');
   });
 
   const shutdown = async (): Promise<void> => {
