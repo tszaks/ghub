@@ -829,6 +829,18 @@ class GmailMultiInboxServer {
                   additionalProperties: false,
                 },
               },
+              thread_id: {
+                type: 'string',
+                description: 'Optional Gmail thread ID. When set, the draft is created as a reply in that thread.',
+              },
+              in_reply_to: {
+                type: 'string',
+                description: 'Optional RFC 2822 Message-ID of the email being replied to. Sets the In-Reply-To header for proper threading.',
+              },
+              references: {
+                type: 'string',
+                description: 'Optional RFC 2822 References header value for threading.',
+              },
             },
             required: ['account', 'to', 'subject', 'body'],
             additionalProperties: false,
@@ -1778,6 +1790,9 @@ class GmailMultiInboxServer {
         filename: attachment.filename,
         contentType: attachment.content_type,
       })),
+      threadId: valueToString(rawArgs.thread_id, '') || undefined,
+      inReplyTo: valueToString(rawArgs.in_reply_to, '') || undefined,
+      references: valueToString(rawArgs.references, '') || undefined,
     });
 
     return textResult(
