@@ -562,7 +562,7 @@ export class GmailAccountClient {
   }
 
   async searchDriveFiles(query: string, maxResults: number): Promise<DriveFileSummary[]> {
-    const boundedMax = Math.max(1, Math.min(maxResults, 100));
+    const boundedMax = Math.max(1, Math.min(maxResults, 500));
 
     try {
       const response = await this.drive.files.list({
@@ -595,7 +595,7 @@ export class GmailAccountClient {
     maxResults: number,
     includeBody: boolean
   ): Promise<ParsedEmail[]> {
-    const boundedMax = Math.max(1, Math.min(maxResults, 100));
+    const boundedMax = Math.max(1, Math.min(maxResults, 500));
 
     const listResponse = await this.gmail.users.messages.list({
       userId: 'me',
