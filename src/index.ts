@@ -464,7 +464,7 @@ class GmailMultiInboxServer {
               },
               max_results: {
                 type: 'number',
-                description: 'Maximum emails to return (1-100).',
+                description: 'Maximum emails to return (1-500).',
                 default: 20,
               },
               include_body: {
@@ -493,7 +493,7 @@ class GmailMultiInboxServer {
               },
               max_results: {
                 type: 'number',
-                description: 'Maximum emails to return (1-100).',
+                description: 'Maximum emails to return (1-500).',
                 default: 25,
               },
             },
@@ -518,7 +518,7 @@ class GmailMultiInboxServer {
               },
               max_results: {
                 type: 'number',
-                description: 'Maximum files to return (1-100).',
+                description: 'Maximum files to return (1-500).',
                 default: 25,
               },
             },
@@ -1105,7 +1105,7 @@ class GmailMultiInboxServer {
     const targetAccounts = resolveReadAccounts(config, args.account);
     const query = args.query?.trim() ?? '';
     const includeBody = args.include_body ?? false;
-    const maxResults = clamp(args.max_results ?? 20, 1, 100);
+    const maxResults = clamp(args.max_results ?? 20, 1, 500);
 
     const accountResults = await Promise.all(
       targetAccounts.map(async (account) => {
@@ -1161,7 +1161,7 @@ class GmailMultiInboxServer {
 
     const config = await this.loadConfig();
     const targetAccounts = resolveReadAccounts(config, args.account);
-    const maxResults = clamp(args.max_results ?? 25, 1, 100);
+    const maxResults = clamp(args.max_results ?? 25, 1, 500);
 
     const accountResults = await Promise.all(
       targetAccounts.map(async (account) => {
@@ -1219,7 +1219,7 @@ class GmailMultiInboxServer {
 
     const config = await this.loadConfig();
     const targetAccounts = resolveReadAccounts(config, args.account);
-    const maxResults = clamp(args.max_results ?? 25, 1, 100);
+    const maxResults = clamp(args.max_results ?? 25, 1, 500);
 
     const accountResults = await Promise.all(
       targetAccounts.map(async (account) => {
