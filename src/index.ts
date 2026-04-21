@@ -34,8 +34,12 @@ import {
   generateAuthUrlFromCredentials,
   readCredentialsFile,
   type AttachmentMetadata,
+  type CalendarEvent,
+  type CalendarInfo,
+  type DriveFileDetail,
   type DriveFileSummary,
   type ParsedEmail,
+  type SpreadsheetMetadata,
 } from './gmail-client.js';
 import { saveAndExtract, type AttachmentContent } from './attachments.js';
 
@@ -156,6 +160,226 @@ interface UnsubscribeArgs {
 }
 
 type MuteScope = 'subject' | 'thread_only';
+
+// ─── Drive arg interfaces ────────────────────────────────────────────────────
+
+interface ListDriveFilesArgs {
+  account?: string;
+  folder_id?: string;
+  query?: string;
+  max_results?: number;
+  page_token?: string;
+}
+
+interface DriveFileIdArgs {
+  account: string;
+  file_id: string;
+}
+
+interface UploadDriveFileArgs {
+  account: string;
+  local_path: string;
+  name?: string;
+  folder_id?: string;
+  mime_type?: string;
+}
+
+interface CreateDriveFolderArgs {
+  account: string;
+  name: string;
+  parent_id?: string;
+}
+
+interface UpdateDriveFileArgs {
+  account: string;
+  file_id: string;
+  name?: string;
+  add_parents?: string;
+  remove_parents?: string;
+  starred?: boolean;
+  description?: string;
+}
+
+interface ShareDriveFileArgs {
+  account: string;
+  file_id: string;
+  email?: string;
+  role: string;
+  type: string;
+  send_notification?: boolean;
+  notification_message?: string;
+}
+
+// ─── Sheets arg interfaces ───────────────────────────────────────────────────
+
+interface SheetsSpreadsheetArgs {
+  account: string;
+  spreadsheet_id: string;
+}
+
+interface SheetsReadArgs extends SheetsSpreadsheetArgs {
+  range: string;
+  value_render_option?: string;
+}
+
+interface SheetsWriteArgs extends SheetsSpreadsheetArgs {
+  range: string;
+  values: unknown[][];
+  value_input_option?: string;
+}
+
+interface SheetsAppendArgs extends SheetsSpreadsheetArgs {
+  range: string;
+  values: unknown[][];
+}
+
+interface SheetsCreateArgs {
+  account: string;
+  title: string;
+}
+
+interface SheetsTabArgs extends SheetsSpreadsheetArgs {
+  sheet_title: string;
+}
+
+interface SheetsAddTabArgs extends SheetsSpreadsheetArgs {
+  title: string;
+  index?: number;
+}
+
+interface SheetsRenameTabArgs extends SheetsSpreadsheetArgs {
+  current_title: string;
+  new_title: string;
+}
+
+interface SheetsDimensionArgs extends SheetsSpreadsheetArgs {
+  sheet_title: string;
+  dimension: 'ROWS' | 'COLUMNS';
+  start_index: number;
+  count: number;
+}
+
+interface SheetsFormatArgs extends SheetsSpreadsheetArgs {
+  sheet_title: string;
+  range: string;
+  bold?: boolean;
+  italic?: boolean;
+  font_size?: number;
+  background_color?: string;
+  text_color?: string;
+  horizontal_alignment?: 'LEFT' | 'CENTER' | 'RIGHT';
+  number_format?: string;
+  wrap_strategy?: 'OVERFLOW_CELL' | 'LEGACY_WRAP' | 'CLIP' | 'WRAP';
+}
+
+interface SheetsAddChartArgs extends SheetsSpreadsheetArgs {
+  sheet_title: string;
+  chart_type: 'BAR' | 'LINE' | 'PIE' | 'COLUMN' | 'AREA' | 'SCATTER';
+  data_range: string;
+  title?: string;
+  anchor_row?: number;
+  anchor_col?: number;
+  width_pixels?: number;
+  height_pixels?: number;
+}
+
+// ─── Docs arg interfaces ─────────────────────────────────────────────────────
+
+interface DocsDocumentArgs {
+  account: string;
+  document_id: string;
+}
+
+interface DocsCreateArgs {
+  account: string;
+  title: string;
+}
+
+interface DocsAppendArgs extends DocsDocumentArgs {
+  text: string;
+  style?: 'NORMAL_TEXT' | 'HEADING_1' | 'HEADING_2' | 'HEADING_3';
+  bold?: boolean;
+  italic?: boolean;
+}
+
+interface DocsReplaceArgs extends DocsDocumentArgs {
+  find: string;
+  replace_with: string;
+  match_case?: boolean;
+}
+
+interface DocsInsertTableArgs extends DocsDocumentArgs {
+  rows: number;
+  columns: number;
+}
+
+interface DocsApplyStyleArgs extends DocsDocumentArgs {
+  start_index: number;
+  end_index: number;
+  style: 'NORMAL_TEXT' | 'HEADING_1' | 'HEADING_2' | 'HEADING_3' | 'HEADING_4';
+}
+
+// ─── Calendar arg interfaces ─────────────────────────────────────────────────
+
+interface CalendarAccountArgs {
+  account?: string;
+}
+
+interface ListCalendarEventsArgs {
+  account?: string;
+  calendar_id?: string;
+  time_min?: string;
+  time_max?: string;
+  query?: string;
+  max_results?: number;
+  single_events?: boolean;
+}
+
+interface CalendarEventArgs {
+  account: string;
+  calendar_id: string;
+  event_id: string;
+}
+
+interface CreateCalendarEventArgs {
+  account: string;
+  calendar_id?: string;
+  summary: string;
+  description?: string;
+  location?: string;
+  start_date_time?: string;
+  start_date?: string;
+  end_date_time?: string;
+  end_date?: string;
+  time_zone?: string;
+  attendees?: string[];
+  recurrence?: string[];
+  send_notifications?: boolean;
+}
+
+interface UpdateCalendarEventArgs {
+  account: string;
+  calendar_id: string;
+  event_id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  start_date_time?: string;
+  start_date?: string;
+  end_date_time?: string;
+  end_date?: string;
+  time_zone?: string;
+  attendees?: string[];
+  status?: string;
+  send_notifications?: boolean;
+}
+
+interface DeleteCalendarEventArgs {
+  account: string;
+  calendar_id: string;
+  event_id: string;
+  send_notifications?: boolean;
+}
 
 interface MuteThreadArgs {
   account: string;
@@ -371,6 +595,91 @@ function formatEmailListOutput(input: {
   return sections.join('\n');
 }
 
+function formatDriveFileDetail(file: DriveFileDetail): string {
+  const lines = [
+    `**Account**: ${file.accountId} (${file.accountEmail})`,
+    `**File ID**: ${file.id}`,
+    `**Name**: ${file.name}`,
+    `**MIME Type**: ${file.mimeType}`,
+    `**Size**: ${file.size !== undefined ? `${file.size.toLocaleString()} bytes` : '(unavailable)'}`,
+    `**Created**: ${file.createdTime || '(unknown)'}`,
+    `**Modified**: ${file.modifiedTime || '(unknown)'}`,
+    `**Owners**: ${file.owners.length > 0 ? file.owners.join(', ') : '(unknown)'}`,
+    `**Shared**: ${file.shared ? 'yes' : 'no'}`,
+    `**Trashed**: ${file.trashed ? 'yes' : 'no'}`,
+    `**Starred**: ${file.starred ? 'yes' : 'no'}`,
+  ];
+  if (file.parents?.length) lines.push(`**Parent IDs**: ${file.parents.join(', ')}`);
+  if (file.webViewLink) lines.push(`**Open**: ${file.webViewLink}`);
+  if (file.exportLinks && Object.keys(file.exportLinks).length > 0) {
+    lines.push('**Export Links**:');
+    for (const [mime, link] of Object.entries(file.exportLinks)) {
+      lines.push(`  - ${mime}: ${link}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatSpreadsheetMetadata(meta: SpreadsheetMetadata): string {
+  const lines = [
+    `**Spreadsheet ID**: ${meta.id}`,
+    `**Title**: ${meta.title}`,
+    `**URL**: ${meta.url}`,
+    `**Sheets** (${meta.sheets.length}):`,
+  ];
+  for (const s of meta.sheets) {
+    lines.push(`  - [${s.index}] "${s.title}" — ${s.rowCount} rows × ${s.columnCount} cols (sheetId: ${s.sheetId})`);
+  }
+  return lines.join('\n');
+}
+
+function formatCalendarInfo(cal: CalendarInfo): string {
+  const primary = cal.primary ? ' (primary)' : '';
+  const lines = [
+    `**Calendar ID**: ${cal.id}`,
+    `**Name**: ${cal.summary}${primary}`,
+    `**Account**: ${cal.accountId} (${cal.accountEmail})`,
+    `**Access Role**: ${cal.accessRole ?? '(unknown)'}`,
+  ];
+  if (cal.timeZone) lines.push(`**Time Zone**: ${cal.timeZone}`);
+  if (cal.description) lines.push(`**Description**: ${cal.description}`);
+  return lines.join('\n');
+}
+
+function formatCalendarEvent(event: CalendarEvent): string {
+  const startTime = event.start.dateTime || event.start.date || '(unknown)';
+  const endTime = event.end.dateTime || event.end.date || '(unknown)';
+  const lines = [
+    `**Account**: ${event.accountId} (${event.accountEmail})`,
+    `**Calendar**: ${event.calendarId}`,
+    `**Event ID**: ${event.id}`,
+    `**Status**: ${event.status ?? 'confirmed'}`,
+    `**Start**: ${startTime}`,
+    `**End**: ${endTime}`,
+  ];
+  if (event.location) lines.push(`**Location**: ${event.location}`);
+  if (event.description) {
+    const desc = event.description.length > 400 ? `${event.description.slice(0, 400)}…` : event.description;
+    lines.push(`**Description**: ${desc}`);
+  }
+  if (event.organizer) lines.push(`**Organizer**: ${event.organizer.displayName || event.organizer.email}`);
+  if (event.attendees.length > 0) {
+    lines.push(`**Attendees** (${event.attendees.length}):`);
+    for (const a of event.attendees) {
+      const status = a.responseStatus ? ` [${a.responseStatus}]` : '';
+      const self = a.self ? ' (you)' : '';
+      lines.push(`  - ${a.displayName || a.email}${status}${self}`);
+    }
+  }
+  if (event.htmlLink) lines.push(`**Open**: ${event.htmlLink}`);
+  if (event.recurrence?.length) lines.push(`**Recurrence**: ${event.recurrence.join(', ')}`);
+  if (event.conferenceData?.entryPoints?.length) {
+    const meet = event.conferenceData.entryPoints.find((ep) => ep.entryPointType === 'video');
+    if (meet) lines.push(`**Meet Link**: ${meet.uri}`);
+  }
+  return lines.join('\n');
+}
+
 function formatDriveFileListOutput(input: {
   title: string;
   scopeText: string;
@@ -412,8 +721,8 @@ class GmailMultiInboxServer {
   constructor() {
     this.server = new Server(
       {
-        name: 'gmail-multi-inbox-mcp',
-        version: '1.0.0',
+        name: 'ghub',
+        version: '1.4.0',
       },
       {
         capabilities: {
@@ -426,7 +735,7 @@ class GmailMultiInboxServer {
     this.setupHandlers();
 
     this.server.onerror = (error) => {
-      console.error('[gmail-multi-inbox-mcp] MCP error:', error);
+      console.error('[ghub] MCP error:', error);
     };
   }
 
@@ -988,6 +1297,524 @@ class GmailMultiInboxServer {
             additionalProperties: false,
           },
         },
+
+        // ─── Drive tools ────────────────────────────────────────────────────
+        {
+          name: 'list_drive_files',
+          description: 'List Google Drive files. Omitting account aggregates across all enabled accounts. Optionally filter by folder or text query.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Optional account id. Omit to aggregate across all enabled accounts.' },
+              folder_id: { type: 'string', description: 'Optional folder ID to list contents of a specific folder.' },
+              query: { type: 'string', description: 'Optional text to search in file names and content.' },
+              max_results: { type: 'number', description: 'Maximum files to return (1-500, default 25).' },
+              page_token: { type: 'string', description: 'Pagination token from a previous response.' },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'get_drive_file',
+          description: 'Get full metadata for a specific Google Drive file including size, parents, export links.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              file_id: { type: 'string', description: 'Google Drive file ID.' },
+            },
+            required: ['account', 'file_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'get_drive_file_content',
+          description: 'Download a Drive file and extract its text content. Google Docs/Sheets/Slides are exported to Office formats then parsed. PDFs, images, and text files are also supported.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              file_id: { type: 'string', description: 'Google Drive file ID.' },
+            },
+            required: ['account', 'file_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'upload_drive_file',
+          description: 'Upload a local file to Google Drive.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              local_path: { type: 'string', description: 'Absolute local path to the file to upload.' },
+              name: { type: 'string', description: 'Optional filename override in Drive.' },
+              folder_id: { type: 'string', description: 'Optional parent folder ID.' },
+              mime_type: { type: 'string', description: 'Optional MIME type override.' },
+            },
+            required: ['account', 'local_path'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'create_drive_folder',
+          description: 'Create a new folder in Google Drive.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              name: { type: 'string', description: 'Folder name.' },
+              parent_id: { type: 'string', description: 'Optional parent folder ID.' },
+            },
+            required: ['account', 'name'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'update_drive_file',
+          description: 'Update a Drive file — rename it, move it between folders, star/unstar, or update its description.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              file_id: { type: 'string', description: 'Google Drive file ID.' },
+              name: { type: 'string', description: 'New file name.' },
+              add_parents: { type: 'string', description: 'Comma-separated folder IDs to add as parents (moves file).' },
+              remove_parents: { type: 'string', description: 'Comma-separated folder IDs to remove from parents.' },
+              starred: { type: 'boolean', description: 'Star or unstar the file.' },
+              description: { type: 'string', description: 'New file description.' },
+            },
+            required: ['account', 'file_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'trash_drive_file',
+          description: 'Move a Google Drive file to trash.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              file_id: { type: 'string', description: 'Google Drive file ID.' },
+            },
+            required: ['account', 'file_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'share_drive_file',
+          description: 'Share a Google Drive file by adding a permission.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              file_id: { type: 'string', description: 'Google Drive file ID.' },
+              email: { type: 'string', description: 'Email address of the person to share with (for type=user or type=group).' },
+              role: { type: 'string', enum: ['reader', 'commenter', 'writer', 'owner'], description: 'Permission role.' },
+              type: { type: 'string', enum: ['user', 'group', 'domain', 'anyone'], description: 'Permission type.' },
+              send_notification: { type: 'boolean', description: 'Send notification email (default true).', default: true },
+              notification_message: { type: 'string', description: 'Optional message included in the share notification email.' },
+            },
+            required: ['account', 'file_id', 'role', 'type'],
+            additionalProperties: false,
+          },
+        },
+
+        // ─── Sheets tools ────────────────────────────────────────────────────
+        {
+          name: 'sheets_get',
+          description: 'Get Google Sheets spreadsheet metadata: title, sheet tabs, row/column counts.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID (from the URL).' },
+            },
+            required: ['account', 'spreadsheet_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_read',
+          description: 'Read cell values from a Google Sheet range (e.g., "Sheet1!A1:D10" or "A1:D10" for the first sheet).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              range: { type: 'string', description: 'A1 notation range, e.g. "Sheet1!A1:D10".' },
+              value_render_option: { type: 'string', enum: ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'], description: 'How values are rendered (default FORMATTED_VALUE).' },
+            },
+            required: ['account', 'spreadsheet_id', 'range'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_write',
+          description: 'Write values to a Google Sheet range. Overwrites existing values in the specified range.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              range: { type: 'string', description: 'A1 notation range, e.g. "Sheet1!A1".' },
+              values: { type: 'array', items: { type: 'array' }, description: '2D array of values to write (rows × columns).' },
+              value_input_option: { type: 'string', enum: ['RAW', 'USER_ENTERED'], description: 'How values are parsed (default USER_ENTERED).' },
+            },
+            required: ['account', 'spreadsheet_id', 'range', 'values'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_append',
+          description: 'Append rows to a Google Sheet after the last row with data.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              range: { type: 'string', description: 'Sheet name or range to append to, e.g. "Sheet1".' },
+              values: { type: 'array', items: { type: 'array' }, description: '2D array of rows to append.' },
+            },
+            required: ['account', 'spreadsheet_id', 'range', 'values'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_create',
+          description: 'Create a new Google Sheets spreadsheet.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              title: { type: 'string', description: 'Spreadsheet title.' },
+            },
+            required: ['account', 'title'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_add_tab',
+          description: 'Add a new sheet tab to an existing spreadsheet.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              title: { type: 'string', description: 'Name for the new sheet tab.' },
+              index: { type: 'number', description: 'Optional zero-based position for the new tab.' },
+            },
+            required: ['account', 'spreadsheet_id', 'title'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_rename_tab',
+          description: 'Rename a sheet tab in a spreadsheet.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              current_title: { type: 'string', description: 'Current name of the sheet tab.' },
+              new_title: { type: 'string', description: 'New name for the sheet tab.' },
+            },
+            required: ['account', 'spreadsheet_id', 'current_title', 'new_title'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_delete_tab',
+          description: 'Delete a sheet tab from a spreadsheet.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              sheet_title: { type: 'string', description: 'Name of the sheet tab to delete.' },
+            },
+            required: ['account', 'spreadsheet_id', 'sheet_title'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_format',
+          description: 'Apply formatting to a range of cells: bold, italic, font size, background/text color, alignment, number format, wrap strategy.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              sheet_title: { type: 'string', description: 'Sheet tab name.' },
+              range: { type: 'string', description: 'A1 notation range, e.g. "A1:D1".' },
+              bold: { type: 'boolean', description: 'Apply bold.' },
+              italic: { type: 'boolean', description: 'Apply italic.' },
+              font_size: { type: 'number', description: 'Font size in points.' },
+              background_color: { type: 'string', description: 'Background color as hex, e.g. "#FF0000".' },
+              text_color: { type: 'string', description: 'Text color as hex, e.g. "#FFFFFF".' },
+              horizontal_alignment: { type: 'string', enum: ['LEFT', 'CENTER', 'RIGHT'], description: 'Horizontal text alignment.' },
+              number_format: { type: 'string', description: 'Number format pattern, e.g. "#,##0.00" or "MM/DD/YYYY".' },
+              wrap_strategy: { type: 'string', enum: ['OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP'], description: 'Cell text wrap strategy.' },
+            },
+            required: ['account', 'spreadsheet_id', 'sheet_title', 'range'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_add_chart',
+          description: 'Create a chart in a Google Sheet from a data range.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              sheet_title: { type: 'string', description: 'Sheet tab where the chart will be placed.' },
+              chart_type: { type: 'string', enum: ['BAR', 'LINE', 'PIE', 'COLUMN', 'AREA', 'SCATTER'], description: 'Chart type.' },
+              data_range: { type: 'string', description: 'A1 notation range for chart data, e.g. "A1:B10". First column = labels, second = values.' },
+              title: { type: 'string', description: 'Optional chart title.' },
+              anchor_row: { type: 'number', description: 'Row index (0-based) to anchor the chart (default 0).' },
+              anchor_col: { type: 'number', description: 'Column index (0-based) to anchor the chart (default 0).' },
+              width_pixels: { type: 'number', description: 'Chart width in pixels (default 600).' },
+              height_pixels: { type: 'number', description: 'Chart height in pixels (default 400).' },
+            },
+            required: ['account', 'spreadsheet_id', 'sheet_title', 'chart_type', 'data_range'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_insert_dimension',
+          description: 'Insert rows or columns into a sheet at a specified position.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              sheet_title: { type: 'string', description: 'Sheet tab name.' },
+              dimension: { type: 'string', enum: ['ROWS', 'COLUMNS'], description: 'Whether to insert rows or columns.' },
+              start_index: { type: 'number', description: 'Zero-based index where rows/columns will be inserted.' },
+              count: { type: 'number', description: 'Number of rows or columns to insert.' },
+            },
+            required: ['account', 'spreadsheet_id', 'sheet_title', 'dimension', 'start_index', 'count'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'sheets_delete_dimension',
+          description: 'Delete rows or columns from a sheet.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              spreadsheet_id: { type: 'string', description: 'Spreadsheet ID.' },
+              sheet_title: { type: 'string', description: 'Sheet tab name.' },
+              dimension: { type: 'string', enum: ['ROWS', 'COLUMNS'], description: 'Whether to delete rows or columns.' },
+              start_index: { type: 'number', description: 'Zero-based index of the first row/column to delete.' },
+              count: { type: 'number', description: 'Number of rows or columns to delete.' },
+            },
+            required: ['account', 'spreadsheet_id', 'sheet_title', 'dimension', 'start_index', 'count'],
+            additionalProperties: false,
+          },
+        },
+
+        // ─── Docs tools ──────────────────────────────────────────────────────
+        {
+          name: 'docs_get',
+          description: 'Get the full text content and title of a Google Doc.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              document_id: { type: 'string', description: 'Google Docs document ID.' },
+            },
+            required: ['account', 'document_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'docs_create',
+          description: 'Create a new Google Doc.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              title: { type: 'string', description: 'Document title.' },
+            },
+            required: ['account', 'title'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'docs_append',
+          description: 'Append text to the end of a Google Doc. Optionally apply a heading style and bold/italic.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              document_id: { type: 'string', description: 'Google Docs document ID.' },
+              text: { type: 'string', description: 'Text to append.' },
+              style: { type: 'string', enum: ['NORMAL_TEXT', 'HEADING_1', 'HEADING_2', 'HEADING_3'], description: 'Paragraph style (default NORMAL_TEXT).' },
+              bold: { type: 'boolean', description: 'Apply bold formatting.' },
+              italic: { type: 'boolean', description: 'Apply italic formatting.' },
+            },
+            required: ['account', 'document_id', 'text'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'docs_replace_text',
+          description: 'Find and replace all occurrences of text throughout a Google Doc.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              document_id: { type: 'string', description: 'Google Docs document ID.' },
+              find: { type: 'string', description: 'Text to find.' },
+              replace_with: { type: 'string', description: 'Replacement text.' },
+              match_case: { type: 'boolean', description: 'Case-sensitive match (default false).' },
+            },
+            required: ['account', 'document_id', 'find', 'replace_with'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'docs_insert_table',
+          description: 'Insert an empty table at the end of a Google Doc.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              document_id: { type: 'string', description: 'Google Docs document ID.' },
+              rows: { type: 'number', description: 'Number of rows.' },
+              columns: { type: 'number', description: 'Number of columns.' },
+            },
+            required: ['account', 'document_id', 'rows', 'columns'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'docs_apply_style',
+          description: 'Apply a heading or paragraph style to a text range in a Google Doc by character indices.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              document_id: { type: 'string', description: 'Google Docs document ID.' },
+              start_index: { type: 'number', description: 'Start character index (from docs_get response).' },
+              end_index: { type: 'number', description: 'End character index.' },
+              style: { type: 'string', enum: ['NORMAL_TEXT', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4'], description: 'Style to apply.' },
+            },
+            required: ['account', 'document_id', 'start_index', 'end_index', 'style'],
+            additionalProperties: false,
+          },
+        },
+
+        // ─── Calendar tools ──────────────────────────────────────────────────
+        {
+          name: 'list_calendars',
+          description: 'List all Google Calendars for one or all enabled accounts.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Optional account id. Omit to list calendars for all enabled accounts.' },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'list_events',
+          description: 'List calendar events. Omitting account aggregates across all enabled accounts. Supports time range and text search.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Optional account id.' },
+              calendar_id: { type: 'string', description: 'Calendar ID (default "primary").' },
+              time_min: { type: 'string', description: 'Lower bound for event start time (RFC3339, e.g. "2025-01-01T00:00:00Z").' },
+              time_max: { type: 'string', description: 'Upper bound for event end time (RFC3339).' },
+              query: { type: 'string', description: 'Free text search query.' },
+              max_results: { type: 'number', description: 'Maximum events to return (1-250, default 25).' },
+              single_events: { type: 'boolean', description: 'Expand recurring events into single instances (default true).', default: true },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'get_event',
+          description: 'Get full details of a single calendar event.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              calendar_id: { type: 'string', description: 'Calendar ID.' },
+              event_id: { type: 'string', description: 'Event ID.' },
+            },
+            required: ['account', 'calendar_id', 'event_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'create_event',
+          description: 'Create a new calendar event. Use start_date_time/end_date_time for timed events or start_date/end_date for all-day events.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              calendar_id: { type: 'string', description: 'Calendar ID (default "primary").' },
+              summary: { type: 'string', description: 'Event title.' },
+              description: { type: 'string', description: 'Event description.' },
+              location: { type: 'string', description: 'Event location.' },
+              start_date_time: { type: 'string', description: 'Start time as RFC3339, e.g. "2025-06-01T10:00:00".' },
+              start_date: { type: 'string', description: 'All-day event start date as YYYY-MM-DD.' },
+              end_date_time: { type: 'string', description: 'End time as RFC3339.' },
+              end_date: { type: 'string', description: 'All-day event end date as YYYY-MM-DD.' },
+              time_zone: { type: 'string', description: 'Time zone for start/end (e.g. "America/New_York").' },
+              attendees: { type: 'array', items: { type: 'string' }, description: 'Email addresses of attendees.' },
+              recurrence: { type: 'array', items: { type: 'string' }, description: 'RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;COUNT=5"].' },
+              send_notifications: { type: 'boolean', description: 'Send invite notifications to attendees (default true).' },
+            },
+            required: ['account', 'summary'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'update_event',
+          description: 'Update an existing calendar event. Only provided fields are changed.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              calendar_id: { type: 'string', description: 'Calendar ID.' },
+              event_id: { type: 'string', description: 'Event ID.' },
+              summary: { type: 'string', description: 'New event title.' },
+              description: { type: 'string', description: 'New event description.' },
+              location: { type: 'string', description: 'New event location.' },
+              start_date_time: { type: 'string', description: 'New start time as RFC3339.' },
+              start_date: { type: 'string', description: 'New all-day start date.' },
+              end_date_time: { type: 'string', description: 'New end time as RFC3339.' },
+              end_date: { type: 'string', description: 'New all-day end date.' },
+              time_zone: { type: 'string', description: 'Time zone for updated start/end.' },
+              attendees: { type: 'array', items: { type: 'string' }, description: 'Replace full attendees list.' },
+              status: { type: 'string', enum: ['confirmed', 'tentative', 'cancelled'], description: 'Event status.' },
+              send_notifications: { type: 'boolean', description: 'Notify attendees of changes (default true).' },
+            },
+            required: ['account', 'calendar_id', 'event_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'delete_event',
+          description: 'Delete a calendar event.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              calendar_id: { type: 'string', description: 'Calendar ID.' },
+              event_id: { type: 'string', description: 'Event ID.' },
+              send_notifications: { type: 'boolean', description: 'Notify attendees of cancellation (default true).' },
+            },
+            required: ['account', 'calendar_id', 'event_id'],
+            additionalProperties: false,
+          },
+        },
       ],
     }));
 
@@ -1047,6 +1874,47 @@ class GmailMultiInboxServer {
             return await this.handleGetAttachment(args);
           case 'get_all_attachments':
             return await this.handleGetAllAttachments(args);
+
+          // Drive
+          case 'list_drive_files': return await this.handleListDriveFiles(args);
+          case 'get_drive_file': return await this.handleGetDriveFile(args);
+          case 'get_drive_file_content': return await this.handleGetDriveFileContent(args);
+          case 'upload_drive_file': return await this.handleUploadDriveFile(args);
+          case 'create_drive_folder': return await this.handleCreateDriveFolder(args);
+          case 'update_drive_file': return await this.handleUpdateDriveFile(args);
+          case 'trash_drive_file': return await this.handleTrashDriveFile(args);
+          case 'share_drive_file': return await this.handleShareDriveFile(args);
+
+          // Sheets
+          case 'sheets_get': return await this.handleSheetsGet(args);
+          case 'sheets_read': return await this.handleSheetsRead(args);
+          case 'sheets_write': return await this.handleSheetsWrite(args);
+          case 'sheets_append': return await this.handleSheetsAppend(args);
+          case 'sheets_create': return await this.handleSheetsCreate(args);
+          case 'sheets_add_tab': return await this.handleSheetsAddTab(args);
+          case 'sheets_rename_tab': return await this.handleSheetsRenameTab(args);
+          case 'sheets_delete_tab': return await this.handleSheetsDeleteTab(args);
+          case 'sheets_format': return await this.handleSheetsFormat(args);
+          case 'sheets_add_chart': return await this.handleSheetsAddChart(args);
+          case 'sheets_insert_dimension': return await this.handleSheetsInsertDimension(args);
+          case 'sheets_delete_dimension': return await this.handleSheetsDeleteDimension(args);
+
+          // Docs
+          case 'docs_get': return await this.handleDocsGet(args);
+          case 'docs_create': return await this.handleDocsCreate(args);
+          case 'docs_append': return await this.handleDocsAppend(args);
+          case 'docs_replace_text': return await this.handleDocsReplaceText(args);
+          case 'docs_insert_table': return await this.handleDocsInsertTable(args);
+          case 'docs_apply_style': return await this.handleDocsApplyStyle(args);
+
+          // Calendar
+          case 'list_calendars': return await this.handleListCalendars(args);
+          case 'list_events': return await this.handleListEvents(args);
+          case 'get_event': return await this.handleGetEvent(args);
+          case 'create_event': return await this.handleCreateEvent(args);
+          case 'update_event': return await this.handleUpdateEvent(args);
+          case 'delete_event': return await this.handleDeleteEvent(args);
+
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -2105,6 +2973,669 @@ class GmailMultiInboxServer {
     return textResult(lines.join('\n'));
   }
 
+  // ─── Drive handlers ────────────────────────────────────────────────────────
+
+  private async handleListDriveFiles(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account, '').trim() || undefined;
+    const folderId = valueToString(rawArgs.folder_id, '').trim() || undefined;
+    const query = valueToString(rawArgs.query, '').trim() || undefined;
+    const maxResults = clamp(valueToNumber(rawArgs.max_results, 25), 1, 500);
+    const pageToken = valueToString(rawArgs.page_token, '').trim() || undefined;
+
+    const config = await this.loadConfig();
+    const targetAccounts = resolveReadAccounts(config, accountId);
+
+    const results = await Promise.all(
+      targetAccounts.map(async (account) => {
+        try {
+          const client = await this.getClientForAccount(account);
+          const result = await client.listDriveFiles({ folderId, query, maxResults, pageToken });
+          return { account, files: result.files, nextPageToken: result.nextPageToken, error: null as string | null };
+        } catch (error) {
+          return { account, files: [] as DriveFileSummary[], nextPageToken: undefined, error: `${account.id}: ${(error as Error).message}` };
+        }
+      })
+    );
+
+    const merged = results.flatMap((r) => r.files).sort((a, b) => driveFileDateForSort(b) - driveFileDateForSort(a));
+    const errors = results.map((r) => r.error).filter((e): e is string => Boolean(e));
+    const returned = merged.slice(0, maxResults);
+    const nextTokens = results.filter((r) => r.nextPageToken).map((r) => `${r.account.id}: ${r.nextPageToken}`);
+
+    return textResult(
+      formatDriveFileListOutput({
+        title: 'Google Drive Files',
+        scopeText: accountId ? `account ${accountId}` : `all enabled accounts (${targetAccounts.length})`,
+        queryText: query ?? (folderId ? `folder: ${folderId}` : '(all files)'),
+        totalFound: merged.length,
+        returned,
+        errors: nextTokens.length > 0 ? [...errors, `Next page tokens: ${nextTokens.join(', ')}`] : errors,
+      })
+    );
+  }
+
+  private async handleGetDriveFile(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const fileId = valueToString(rawArgs.file_id).trim();
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const file = await client.getDriveFile(fileId);
+    return textResult(['# Google Drive File', '', formatDriveFileDetail(file)].join('\n'));
+  }
+
+  private async handleGetDriveFileContent(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const fileId = valueToString(rawArgs.file_id).trim();
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+
+    const { bytes, contentType, filename } = await client.getDriveFileContent(fileId);
+    const fakeMetadata: AttachmentMetadata = { id: fileId, filename, contentType, sizeBytes: bytes.length, isInline: false };
+    const content = await saveAndExtract(bytes, fakeMetadata);
+
+    const lines = [
+      '# Google Drive File Content',
+      '',
+      `**Account**: ${acc.id} (${acc.email})`,
+      `**File ID**: ${fileId}`,
+      `**Filename**: ${filename}`,
+      `**Content Type**: ${contentType}`,
+      `**Size**: ${bytes.length.toLocaleString()} bytes`,
+      `**Saved To**: ${content.savedPath}`,
+      `**Extraction Method**: ${content.extractionMethod}`,
+    ];
+    if (content.textTruncated) lines.push('**Text Truncated**: true (file saved in full)');
+    if (content.extractionError) lines.push(`**Extraction Error**: ${content.extractionError}`);
+    if (content.text) { lines.push('', '**Content**:', '', content.text); }
+    else { lines.push('', '*(no text extractable — file saved to disk)*'); }
+
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleUploadDriveFile(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const file = await client.uploadDriveFile({
+      localPath: valueToString(rawArgs.local_path),
+      name: valueToString(rawArgs.name, '').trim() || undefined,
+      folderId: valueToString(rawArgs.folder_id, '').trim() || undefined,
+      mimeType: valueToString(rawArgs.mime_type, '').trim() || undefined,
+    });
+    return textResult(['✅ File uploaded to Google Drive.', '', formatDriveFileDetail(file)].join('\n'));
+  }
+
+  private async handleCreateDriveFolder(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const folder = await client.createDriveFolder(
+      valueToString(rawArgs.name),
+      valueToString(rawArgs.parent_id, '').trim() || undefined
+    );
+    return textResult([
+      '✅ Folder created.',
+      '',
+      formatDriveFileItem(folder),
+    ].join('\n'));
+  }
+
+  private async handleUpdateDriveFile(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const file = await client.updateDriveFile(valueToString(rawArgs.file_id).trim(), {
+      name: valueToString(rawArgs.name, '').trim() || undefined,
+      addParents: valueToString(rawArgs.add_parents, '').trim() || undefined,
+      removeParents: valueToString(rawArgs.remove_parents, '').trim() || undefined,
+      starred: rawArgs.starred !== undefined ? valueToBoolean(rawArgs.starred, false) : undefined,
+      description: valueToString(rawArgs.description, '').trim() || undefined,
+    });
+    return textResult(['✅ Drive file updated.', '', formatDriveFileItem(file)].join('\n'));
+  }
+
+  private async handleTrashDriveFile(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const fileId = valueToString(rawArgs.file_id).trim();
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.trashDriveFile(fileId);
+    return textResult(`✅ File ${fileId} moved to trash in account ${acc.id}.`);
+  }
+
+  private async handleShareDriveFile(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.shareDriveFile(valueToString(rawArgs.file_id).trim(), {
+      email: valueToString(rawArgs.email, '').trim() || undefined,
+      role: valueToString(rawArgs.role),
+      type: valueToString(rawArgs.type),
+      sendNotification: rawArgs.send_notification !== undefined ? valueToBoolean(rawArgs.send_notification, true) : true,
+      notificationMessage: valueToString(rawArgs.notification_message, '').trim() || undefined,
+    });
+    return textResult([
+      `✅ Drive file shared in account ${acc.id}.`,
+      `- File ID: ${valueToString(rawArgs.file_id)}`,
+      `- Role: ${valueToString(rawArgs.role)}`,
+      `- Type: ${valueToString(rawArgs.type)}`,
+      rawArgs.email ? `- Email: ${valueToString(rawArgs.email)}` : '',
+      `- Permission ID: ${result.permissionId}`,
+    ].filter(Boolean).join('\n'));
+  }
+
+  // ─── Sheets handlers ───────────────────────────────────────────────────────
+
+  private async handleSheetsGet(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const meta = await client.getSheetsMetadata(valueToString(rawArgs.spreadsheet_id));
+    return textResult(['# Google Sheets Metadata', '', `**Account**: ${acc.id} (${acc.email})`, '', formatSpreadsheetMetadata(meta)].join('\n'));
+  }
+
+  private async handleSheetsRead(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.readSheetValues(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.range),
+      valueToString(rawArgs.value_render_option, 'FORMATTED_VALUE') || 'FORMATTED_VALUE',
+    );
+
+    const lines: string[] = [
+      '# Sheets Values',
+      '',
+      `**Account**: ${acc.id} (${acc.email})`,
+      `**Spreadsheet**: ${valueToString(rawArgs.spreadsheet_id)}`,
+      `**Range**: ${result.range}`,
+      `**Rows**: ${result.values.length}`,
+      '',
+    ];
+
+    if (result.values.length === 0) {
+      lines.push('*(empty range — no data)*');
+    } else {
+      lines.push('```');
+      for (const row of result.values) {
+        lines.push((row as unknown[]).map((cell) => String(cell ?? '')).join('\t'));
+      }
+      lines.push('```');
+    }
+
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleSheetsWrite(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+
+    if (!Array.isArray(rawArgs.values)) throw new Error('values must be a 2D array.');
+    const values = rawArgs.values as unknown[][];
+
+    const result = await client.writeSheetValues(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.range),
+      values,
+      valueToString(rawArgs.value_input_option, 'USER_ENTERED') || 'USER_ENTERED',
+    );
+
+    return textResult([
+      '✅ Sheets values written.',
+      `Account: ${acc.id} (${acc.email})`,
+      `Updated Range: ${result.updatedRange}`,
+      `Rows Updated: ${result.updatedRows}`,
+      `Cells Updated: ${result.updatedCells}`,
+    ].join('\n'));
+  }
+
+  private async handleSheetsAppend(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+
+    if (!Array.isArray(rawArgs.values)) throw new Error('values must be a 2D array.');
+    const values = rawArgs.values as unknown[][];
+
+    const result = await client.appendSheetValues(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.range),
+      values,
+    );
+
+    return textResult([
+      '✅ Rows appended.',
+      `Account: ${acc.id} (${acc.email})`,
+      `Updated Range: ${result.updatedRange}`,
+      `Rows Appended: ${result.updatedRows}`,
+    ].join('\n'));
+  }
+
+  private async handleSheetsCreate(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.createSpreadsheet(valueToString(rawArgs.title));
+    return textResult([
+      '✅ Spreadsheet created.',
+      `Account: ${acc.id} (${acc.email})`,
+      `Spreadsheet ID: ${result.id}`,
+      `URL: ${result.url}`,
+    ].join('\n'));
+  }
+
+  private async handleSheetsAddTab(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.addSheetTab(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.title),
+      rawArgs.index !== undefined ? valueToNumber(rawArgs.index, 0) : undefined,
+    );
+    return textResult(`✅ Sheet tab "${result.title}" added (sheetId: ${result.sheetId}) in spreadsheet ${valueToString(rawArgs.spreadsheet_id)}.`);
+  }
+
+  private async handleSheetsRenameTab(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.renameSheetTab(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.current_title),
+      valueToString(rawArgs.new_title),
+    );
+    return textResult(`✅ Sheet tab renamed from "${valueToString(rawArgs.current_title)}" to "${valueToString(rawArgs.new_title)}".`);
+  }
+
+  private async handleSheetsDeleteTab(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.deleteSheetTab(valueToString(rawArgs.spreadsheet_id), valueToString(rawArgs.sheet_title));
+    return textResult(`✅ Sheet tab "${valueToString(rawArgs.sheet_title)}" deleted.`);
+  }
+
+  private async handleSheetsFormat(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.formatCells(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.sheet_title),
+      valueToString(rawArgs.range),
+      {
+        bold: rawArgs.bold !== undefined ? valueToBoolean(rawArgs.bold) : undefined,
+        italic: rawArgs.italic !== undefined ? valueToBoolean(rawArgs.italic) : undefined,
+        fontSize: rawArgs.font_size !== undefined ? valueToNumber(rawArgs.font_size, 0) || undefined : undefined,
+        backgroundColor: valueToString(rawArgs.background_color, '').trim() || undefined,
+        textColor: valueToString(rawArgs.text_color, '').trim() || undefined,
+        horizontalAlignment: (valueToString(rawArgs.horizontal_alignment, '').trim() || undefined) as 'LEFT' | 'CENTER' | 'RIGHT' | undefined,
+        numberFormat: valueToString(rawArgs.number_format, '').trim() || undefined,
+        wrapStrategy: (valueToString(rawArgs.wrap_strategy, '').trim() || undefined) as 'OVERFLOW_CELL' | 'LEGACY_WRAP' | 'CLIP' | 'WRAP' | undefined,
+      },
+    );
+    return textResult(`✅ Formatting applied to ${valueToString(rawArgs.range)} in sheet "${valueToString(rawArgs.sheet_title)}".`);
+  }
+
+  private async handleSheetsAddChart(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.addChart(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.sheet_title),
+      {
+        chartType: valueToString(rawArgs.chart_type) as 'BAR' | 'LINE' | 'PIE' | 'COLUMN' | 'AREA' | 'SCATTER',
+        dataRange: valueToString(rawArgs.data_range),
+        title: valueToString(rawArgs.title, '').trim() || undefined,
+        anchorRow: rawArgs.anchor_row !== undefined ? valueToNumber(rawArgs.anchor_row, 0) : undefined,
+        anchorCol: rawArgs.anchor_col !== undefined ? valueToNumber(rawArgs.anchor_col, 0) : undefined,
+        widthPixels: rawArgs.width_pixels !== undefined ? valueToNumber(rawArgs.width_pixels, 600) : undefined,
+        heightPixels: rawArgs.height_pixels !== undefined ? valueToNumber(rawArgs.height_pixels, 400) : undefined,
+      },
+    );
+    return textResult([
+      '✅ Chart created.',
+      `Account: ${acc.id} (${acc.email})`,
+      `Chart ID: ${result.chartId}`,
+      `Type: ${valueToString(rawArgs.chart_type)}`,
+      `Data Range: ${valueToString(rawArgs.data_range)}`,
+    ].join('\n'));
+  }
+
+  private async handleSheetsInsertDimension(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const dim = valueToString(rawArgs.dimension) as 'ROWS' | 'COLUMNS';
+    const count = valueToNumber(rawArgs.count, 1);
+    await client.insertDimension(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.sheet_title),
+      dim,
+      valueToNumber(rawArgs.start_index, 0),
+      count,
+    );
+    return textResult(`✅ Inserted ${count} ${dim.toLowerCase()} at index ${valueToNumber(rawArgs.start_index, 0)} in sheet "${valueToString(rawArgs.sheet_title)}".`);
+  }
+
+  private async handleSheetsDeleteDimension(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const dim = valueToString(rawArgs.dimension) as 'ROWS' | 'COLUMNS';
+    const count = valueToNumber(rawArgs.count, 1);
+    await client.deleteDimension(
+      valueToString(rawArgs.spreadsheet_id),
+      valueToString(rawArgs.sheet_title),
+      dim,
+      valueToNumber(rawArgs.start_index, 0),
+      count,
+    );
+    return textResult(`✅ Deleted ${count} ${dim.toLowerCase()} starting at index ${valueToNumber(rawArgs.start_index, 0)} in sheet "${valueToString(rawArgs.sheet_title)}".`);
+  }
+
+  // ─── Docs handlers ─────────────────────────────────────────────────────────
+
+  private async handleDocsGet(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const doc = await client.getDocument(valueToString(rawArgs.document_id));
+    const preview = doc.body.length > 2000 ? `${doc.body.slice(0, 2000)}\n\n… (${doc.body.length - 2000} more characters)` : doc.body;
+    return textResult([
+      '# Google Doc',
+      '',
+      `**Account**: ${acc.id} (${acc.email})`,
+      `**Document ID**: ${doc.documentId}`,
+      `**Title**: ${doc.title}`,
+      `**URL**: ${doc.url}`,
+      `**Length**: ${doc.body.length} characters`,
+      '',
+      '**Content**:',
+      '',
+      preview,
+    ].join('\n'));
+  }
+
+  private async handleDocsCreate(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.createDocument(valueToString(rawArgs.title));
+    return textResult([
+      '✅ Google Doc created.',
+      `Account: ${acc.id} (${acc.email})`,
+      `Document ID: ${result.documentId}`,
+      `URL: ${result.url}`,
+    ].join('\n'));
+  }
+
+  private async handleDocsAppend(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.appendToDocument(
+      valueToString(rawArgs.document_id),
+      valueToString(rawArgs.text),
+      {
+        style: (valueToString(rawArgs.style, 'NORMAL_TEXT') || 'NORMAL_TEXT') as 'NORMAL_TEXT' | 'HEADING_1' | 'HEADING_2' | 'HEADING_3',
+        bold: rawArgs.bold !== undefined ? valueToBoolean(rawArgs.bold) : undefined,
+        italic: rawArgs.italic !== undefined ? valueToBoolean(rawArgs.italic) : undefined,
+      },
+    );
+    return textResult(`✅ Text appended to document ${valueToString(rawArgs.document_id)} in account ${acc.id}.`);
+  }
+
+  private async handleDocsReplaceText(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const result = await client.replaceInDocument(
+      valueToString(rawArgs.document_id),
+      valueToString(rawArgs.find),
+      valueToString(rawArgs.replace_with),
+      valueToBoolean(rawArgs.match_case, false),
+    );
+    return textResult(`✅ Replaced ${result.occurrencesChanged} occurrence(s) of "${valueToString(rawArgs.find)}" in document ${valueToString(rawArgs.document_id)}.`);
+  }
+
+  private async handleDocsInsertTable(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const rows = valueToNumber(rawArgs.rows, 2);
+    const cols = valueToNumber(rawArgs.columns, 2);
+    await client.insertTableInDocument(valueToString(rawArgs.document_id), rows, cols);
+    return textResult(`✅ Inserted ${rows}×${cols} table at end of document ${valueToString(rawArgs.document_id)}.`);
+  }
+
+  private async handleDocsApplyStyle(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.applyDocHeadingStyle(
+      valueToString(rawArgs.document_id),
+      valueToNumber(rawArgs.start_index, 0),
+      valueToNumber(rawArgs.end_index, 0),
+      valueToString(rawArgs.style) as 'NORMAL_TEXT' | 'HEADING_1' | 'HEADING_2' | 'HEADING_3' | 'HEADING_4',
+    );
+    return textResult(`✅ Applied style "${valueToString(rawArgs.style)}" to indices ${valueToNumber(rawArgs.start_index, 0)}-${valueToNumber(rawArgs.end_index, 0)} in document ${valueToString(rawArgs.document_id)}.`);
+  }
+
+  // ─── Calendar handlers ─────────────────────────────────────────────────────
+
+  private async handleListCalendars(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account, '').trim() || undefined;
+    const config = await this.loadConfig();
+    const targetAccounts = resolveReadAccounts(config, accountId);
+
+    const results = await Promise.all(
+      targetAccounts.map(async (account) => {
+        try {
+          const client = await this.getClientForAccount(account);
+          const cals = await client.listCalendars();
+          return { cals, error: null as string | null };
+        } catch (error) {
+          return { cals: [] as CalendarInfo[], error: `${account.id}: ${(error as Error).message}` };
+        }
+      })
+    );
+
+    const all = results.flatMap((r) => r.cals);
+    const errors = results.map((r) => r.error).filter((e): e is string => Boolean(e));
+
+    const lines: string[] = [
+      '# Google Calendars',
+      '',
+      `**Scope**: ${accountId ? `account ${accountId}` : `all enabled accounts (${targetAccounts.length})`}`,
+      `**Total**: ${all.length}`,
+      '',
+    ];
+
+    all.forEach((cal, i) => {
+      lines.push(`## ${i + 1}. ${cal.summary}${cal.primary ? ' (primary)' : ''}`);
+      lines.push(formatCalendarInfo(cal));
+      lines.push('');
+    });
+
+    if (errors.length > 0) { lines.push('## Account Errors'); lines.push(errors.map((e) => `- ${e}`).join('\n')); }
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleListEvents(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account, '').trim() || undefined;
+    const calendarId = valueToString(rawArgs.calendar_id, 'primary').trim() || 'primary';
+    const timeMin = valueToString(rawArgs.time_min, '').trim() || undefined;
+    const timeMax = valueToString(rawArgs.time_max, '').trim() || undefined;
+    const query = valueToString(rawArgs.query, '').trim() || undefined;
+    const maxResults = clamp(valueToNumber(rawArgs.max_results, 25), 1, 250);
+    const singleEvents = valueToBoolean(rawArgs.single_events, true);
+
+    const config = await this.loadConfig();
+    const targetAccounts = resolveReadAccounts(config, accountId);
+
+    const results = await Promise.all(
+      targetAccounts.map(async (account) => {
+        try {
+          const client = await this.getClientForAccount(account);
+          const events = await client.listCalendarEvents(calendarId, { timeMin, timeMax, query, maxResults, singleEvents });
+          return { events, error: null as string | null };
+        } catch (error) {
+          return { events: [] as CalendarEvent[], error: `${account.id}: ${(error as Error).message}` };
+        }
+      })
+    );
+
+    const merged = results
+      .flatMap((r) => r.events)
+      .sort((a, b) => {
+        const at = a.start.dateTime || a.start.date || '';
+        const bt = b.start.dateTime || b.start.date || '';
+        return at < bt ? -1 : at > bt ? 1 : 0;
+      });
+
+    const errors = results.map((r) => r.error).filter((e): e is string => Boolean(e));
+    const returned = merged.slice(0, maxResults);
+
+    const lines: string[] = [
+      '# Calendar Events',
+      '',
+      `**Scope**: ${accountId ? `account ${accountId}` : `all enabled accounts (${targetAccounts.length})`}`,
+      `**Calendar**: ${calendarId}`,
+    ];
+    if (timeMin) lines.push(`**From**: ${timeMin}`);
+    if (timeMax) lines.push(`**To**: ${timeMax}`);
+    if (query) lines.push(`**Query**: ${query}`);
+    lines.push(`**Total Found**: ${merged.length}`, `**Returned**: ${returned.length}`, '');
+
+    returned.forEach((event, i) => {
+      const startTime = event.start.dateTime || event.start.date || '(unknown)';
+      lines.push(`## ${i + 1}. ${event.summary}`);
+      lines.push(`**Start**: ${startTime}`);
+      lines.push(formatCalendarEvent(event));
+      lines.push('');
+    });
+
+    if (errors.length > 0) { lines.push('## Account Errors'); lines.push(errors.map((e) => `- ${e}`).join('\n')); }
+    return textResult(lines.join('\n'));
+  }
+
+  private async handleGetEvent(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    const event = await client.getCalendarEvent(valueToString(rawArgs.calendar_id), valueToString(rawArgs.event_id));
+    return textResult(['# Calendar Event', '', `**Title**: ${event.summary}`, '', formatCalendarEvent(event)].join('\n'));
+  }
+
+  private async handleCreateEvent(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+
+    const tz = valueToString(rawArgs.time_zone, '').trim() || undefined;
+    const startDT = valueToString(rawArgs.start_date_time, '').trim() || undefined;
+    const startD = valueToString(rawArgs.start_date, '').trim() || undefined;
+    const endDT = valueToString(rawArgs.end_date_time, '').trim() || undefined;
+    const endD = valueToString(rawArgs.end_date, '').trim() || undefined;
+
+    if (!startDT && !startD) throw new Error('Provide start_date_time or start_date.');
+    if (!endDT && !endD) throw new Error('Provide end_date_time or end_date.');
+
+    const event = await client.createCalendarEvent(
+      valueToString(rawArgs.calendar_id, 'primary').trim() || 'primary',
+      {
+        summary: valueToString(rawArgs.summary),
+        description: valueToString(rawArgs.description, '').trim() || undefined,
+        location: valueToString(rawArgs.location, '').trim() || undefined,
+        start: startDT ? { dateTime: startDT, timeZone: tz } : { date: startD },
+        end: endDT ? { dateTime: endDT, timeZone: tz } : { date: endD },
+        attendees: valueToStringArray(rawArgs.attendees),
+        recurrence: valueToStringArray(rawArgs.recurrence),
+        sendNotifications: rawArgs.send_notifications !== undefined ? valueToBoolean(rawArgs.send_notifications, true) : true,
+      },
+    );
+
+    return textResult(['✅ Calendar event created.', '', formatCalendarEvent(event)].join('\n'));
+  }
+
+  private async handleUpdateEvent(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+
+    const tz = valueToString(rawArgs.time_zone, '').trim() || undefined;
+    const startDT = valueToString(rawArgs.start_date_time, '').trim() || undefined;
+    const startD = valueToString(rawArgs.start_date, '').trim() || undefined;
+    const endDT = valueToString(rawArgs.end_date_time, '').trim() || undefined;
+    const endD = valueToString(rawArgs.end_date, '').trim() || undefined;
+
+    const startUpdate = startDT ? { dateTime: startDT, timeZone: tz } : startD ? { date: startD } : undefined;
+    const endUpdate = endDT ? { dateTime: endDT, timeZone: tz } : endD ? { date: endD } : undefined;
+
+    const event = await client.updateCalendarEvent(
+      valueToString(rawArgs.calendar_id),
+      valueToString(rawArgs.event_id),
+      {
+        summary: valueToString(rawArgs.summary, '').trim() || undefined,
+        description: valueToString(rawArgs.description, '').trim() || undefined,
+        location: valueToString(rawArgs.location, '').trim() || undefined,
+        start: startUpdate,
+        end: endUpdate,
+        attendees: rawArgs.attendees !== undefined ? valueToStringArray(rawArgs.attendees) : undefined,
+        status: (valueToString(rawArgs.status, '').trim() || undefined) as string | undefined,
+        sendNotifications: rawArgs.send_notifications !== undefined ? valueToBoolean(rawArgs.send_notifications, true) : true,
+      },
+    );
+
+    return textResult(['✅ Calendar event updated.', '', formatCalendarEvent(event)].join('\n'));
+  }
+
+  private async handleDeleteEvent(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const account = valueToString(rawArgs.account);
+    const config = await this.loadConfig();
+    const acc = resolveWriteAccount(config, account);
+    const client = await this.getClientForAccount(acc);
+    await client.deleteCalendarEvent(
+      valueToString(rawArgs.calendar_id),
+      valueToString(rawArgs.event_id),
+      rawArgs.send_notifications !== undefined ? valueToBoolean(rawArgs.send_notifications, true) : true,
+    );
+    return textResult(`✅ Event ${valueToString(rawArgs.event_id)} deleted from calendar ${valueToString(rawArgs.calendar_id)} in account ${acc.id}.`);
+  }
+
   async connectTransport(transport: StdioServerTransport | SSEServerTransport): Promise<void> {
     await ensureConfigLayout(this.configRoot);
     await this.server.connect(transport);
@@ -2117,7 +3648,7 @@ class GmailMultiInboxServer {
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.connectTransport(transport);
-    console.error(`[gmail-multi-inbox-mcp] Running on stdio. Config root: ${this.configRoot}`);
+    console.error(`[ghub] Running on stdio. Config root: ${this.configRoot}`);
   }
 }
 
@@ -2148,11 +3679,11 @@ async function runSseServer(): Promise<void> {
   };
 
   app.get('/', (_req: Request, res: Response) => {
-    res.status(200).type('text/plain').send('gmail-multi-inbox-mcp SSE server');
+    res.status(200).type('text/plain').send('ghub SSE server');
   });
 
   app.use((req: Request, _res: Response, next) => {
-    console.error('[gmail-multi-inbox-mcp] HTTP ' + req.method + ' ' + req.path);
+    console.error('[ghub] HTTP ' + req.method + ' ' + req.path);
     next();
   });
 
@@ -2168,7 +3699,7 @@ async function runSseServer(): Promise<void> {
 
     try {
       await serverApp.connectTransport(transport);
-      console.error('[gmail-multi-inbox-mcp] SSE session started: ' + sessionId);
+      console.error('[ghub] SSE session started: ' + sessionId);
     } catch (error) {
       sessions.delete(sessionId);
       if (!res.headersSent) {
@@ -2190,7 +3721,7 @@ async function runSseServer(): Promise<void> {
   });
 
   const httpServer = app.listen(port, () => {
-    console.error('[gmail-multi-inbox-mcp] Running on SSE at port ' + port + '. Routes: GET /sse, POST /messages');
+    console.error('[ghub] Running on SSE at port ' + port + '. Routes: GET /sse, POST /messages');
   });
 
   const shutdown = async (): Promise<void> => {
@@ -2227,6 +3758,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('[gmail-multi-inbox-mcp] Fatal error:', error);
+  console.error('[ghub] Fatal error:', error);
   process.exit(1);
 });
