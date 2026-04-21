@@ -253,6 +253,8 @@ async function buildRawEmailMessage(input: {
   bcc?: string;
   html?: boolean;
   attachments?: EmailAttachment[];
+  inReplyTo?: string;
+  references?: string;
 }): Promise<string> {
   const to = normalizeOutgoingAddressList(input.to);
   if (!to) {
@@ -274,6 +276,9 @@ async function buildRawEmailMessage(input: {
 
     const bcc = normalizeOutgoingAddressList(input.bcc);
     if (bcc) lines.push(`Bcc: ${bcc}`);
+
+    if (input.inReplyTo) lines.push(`In-Reply-To: ${input.inReplyTo}`);
+    if (input.references) lines.push(`References: ${input.references}`);
 
     lines.push('', input.body);
     return encodeBase64Url(lines.join('\r\n'));
@@ -345,6 +350,8 @@ async function createRawEmailMessage(input: {
   bcc?: string;
   html?: boolean;
   attachments?: EmailAttachment[];
+  inReplyTo?: string;
+  references?: string;
 }): Promise<string> {
   return buildRawEmailMessage({
     ...input,
@@ -961,14 +968,18 @@ export class GmailAccountClient {
     bcc?: string;
     html?: boolean;
     attachments?: EmailAttachment[];
+    threadId?: string;
+    inReplyTo?: string;
+    references?: string;
   }): Promise<{ draftId: string; threadId?: string }> {
     const raw = await createRawEmailMessage(input);
 
+    const message: { raw: string; threadId?: string } = { raw };
+    if (input.threadId) message.threadId = input.threadId;
+
     const response = await this.gmail.users.drafts.create({
       userId: 'me',
-      requestBody: {
-        message: { raw },
-      },
+      requestBody: { message },
     });
 
     return {
