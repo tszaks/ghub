@@ -1,11 +1,11 @@
 {
-  "name": "gmail-multi-inbox-mcp",
-  "version": "1.3.1",
-  "description": "Multi-inbox Gmail MCP server with built-in OAuth onboarding",
+  "name": "ghub",
+  "version": "1.4.0",
+  "description": "Multi-inbox Gmail, Drive, Sheets, Docs, and Calendar MCP server with built-in OAuth onboarding",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "gmail-multi-inbox-mcp": "dist/index.js"
+    "ghub": "dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
