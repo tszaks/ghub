@@ -1157,7 +1157,7 @@ class GmailMultiInboxServer {
         },
         {
           name: 'delete_drafts',
-          description: 'Permanently delete one or more drafts in one account (account required). Draft IDs are returned by create_draft.',
+          description: 'Permanently delete one or more drafts in one account (account required). Draft IDs are returned by create_draft or list_drafts.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1165,10 +1165,50 @@ class GmailMultiInboxServer {
               draft_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Draft IDs to delete (as returned by create_draft).',
+                description: 'Draft IDs to delete (as returned by create_draft or list_drafts).',
               },
             },
             required: ['account', 'draft_ids'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'send_draft',
+          description: 'Send an existing Gmail draft by draft ID. Returns message_id and thread_id. Use list_drafts to find draft IDs sorted oldest-first.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              draft_id: { type: 'string', description: 'Draft ID to send (as returned by create_draft or list_drafts).' },
+            },
+            required: ['account', 'draft_id'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'list_drafts',
+          description: 'List drafts in an account sorted oldest-first by internalDate. Returns draft_id (for send_draft/delete_drafts), message_id, thread_id, subject, to, and internalDate.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              max_results: { type: 'number', description: 'Maximum number of drafts to return (default 20, max 500).', default: 20 },
+            },
+            required: ['account'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'search_drafts',
+          description: 'Search drafts by Gmail query string. Returns draft_id (for send_draft/delete_drafts), message_id, thread_id, subject, to, and snippet. Use instead of search_emails when you need to delete or send a found draft.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              account: { type: 'string', description: 'Account id.' },
+              query: { type: 'string', description: 'Gmail search query (e.g. "to:bob@example.com" or "subject:follow up").' },
+              max_results: { type: 'number', description: 'Maximum number of results (default 20).', default: 20 },
+            },
+            required: ['account', 'query'],
             additionalProperties: false,
           },
         },
@@ -1864,6 +1904,12 @@ class GmailMultiInboxServer {
             return await this.handleCreateDraft(args);
           case 'delete_drafts':
             return await this.handleDeleteDrafts(args);
+          case 'send_draft':
+            return await this.handleSendDraft(args);
+          case 'list_drafts':
+            return await this.handleListDrafts(args);
+          case 'search_drafts':
+            return await this.handleSearchDrafts(args);
           case 'send_email':
             return await this.handleSendEmail(args);
           case 'begin_account_auth':
@@ -2686,6 +2732,70 @@ class GmailMultiInboxServer {
     const deleted = await client.deleteDrafts(args.draft_ids);
 
     return textResult(`✅ Deleted ${deleted} draft(s) in account ${account.id}.`);
+  }
+
+  private async handleSendDraft(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account);
+    const draftId = valueToString(rawArgs.draft_id);
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, accountId);
+    const client = await this.getClientForAccount(account);
+    const result = await client.sendDraft(draftId);
+
+    return textResult(
+      [
+        '✅ Draft sent.',
+        `Account: ${account.id} (${account.email})`,
+        `Message ID: ${result.messageId || '(unknown)'}`,
+        `Thread ID: ${result.threadId || '(unknown)'}`,
+      ].join('\n')
+    );
+  }
+
+  private async handleListDrafts(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account);
+    const maxResults = typeof rawArgs.max_results === 'number' ? rawArgs.max_results : 20;
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, accountId);
+    const client = await this.getClientForAccount(account);
+    const drafts = await client.listDrafts(maxResults);
+
+    if (drafts.length === 0) {
+      return textResult(`No drafts found in account ${account.id}.`);
+    }
+
+    const lines = drafts.map((d, i) =>
+      `${i + 1}. draft_id=${d.draftId} to="${d.to}" subject="${d.subject}" thread_id=${d.threadId ?? '(none)'} internalDate=${d.internalDate}`
+    );
+
+    return textResult(
+      [`✅ ${drafts.length} draft(s) in account ${account.id} (sorted oldest-first):`, ...lines].join('\n')
+    );
+  }
+
+  private async handleSearchDrafts(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    const accountId = valueToString(rawArgs.account);
+    const query = valueToString(rawArgs.query);
+    const maxResults = typeof rawArgs.max_results === 'number' ? rawArgs.max_results : 20;
+
+    const config = await this.loadConfig();
+    const account = resolveWriteAccount(config, accountId);
+    const client = await this.getClientForAccount(account);
+    const drafts = await client.searchDrafts(query, maxResults);
+
+    if (drafts.length === 0) {
+      return textResult(`No drafts matching "${query}" in account ${account.id}.`);
+    }
+
+    const lines = drafts.map((d, i) =>
+      `${i + 1}. draft_id=${d.draftId} to="${d.to}" subject="${d.subject}" thread_id=${d.threadId ?? '(none)'} snippet="${d.snippet}"`
+    );
+
+    return textResult(
+      [`✅ ${drafts.length} draft(s) matching "${query}" in account ${account.id}:`, ...lines].join('\n')
+    );
   }
 
   private async handleSendEmail(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
