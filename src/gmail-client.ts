@@ -1116,6 +1116,87 @@ export class GmailAccountClient {
     return ids.length;
   }
 
+  async sendDraft(draftId: string): Promise<{ messageId: string; threadId?: string }> {
+    const response = await this.gmail.users.drafts.send({
+      userId: 'me',
+      requestBody: { id: draftId },
+    });
+
+    return {
+      messageId: response.data.id ?? '',
+      threadId: response.data.threadId ?? undefined,
+    };
+  }
+
+  async listDrafts(maxResults = 20): Promise<Array<{ draftId: string; messageId: string; threadId?: string; subject: string; to: string; internalDate: number }>> {
+    const listRes = await this.gmail.users.drafts.list({
+      userId: 'me',
+      maxResults,
+    });
+
+    const drafts = listRes.data.drafts ?? [];
+    if (drafts.length === 0) return [];
+
+    const details = await Promise.all(
+      drafts.map((d) =>
+        this.gmail.users.drafts.get({
+          userId: 'me',
+          id: d.id!,
+          format: 'metadata',
+        })
+      )
+    );
+
+    const results = details.map((res) => {
+      const headers = res.data.message?.payload?.headers ?? [];
+      const get = (name: string) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+      return {
+        draftId: res.data.id ?? '',
+        messageId: res.data.message?.id ?? '',
+        threadId: res.data.message?.threadId ?? undefined,
+        subject: get('Subject'),
+        to: get('To'),
+        internalDate: Number(res.data.message?.internalDate ?? 0),
+      };
+    });
+
+    return results.sort((a, b) => a.internalDate - b.internalDate);
+  }
+
+  async searchDrafts(query: string, maxResults = 20): Promise<Array<{ draftId: string; messageId: string; threadId?: string; subject: string; to: string; snippet: string }>> {
+    const listRes = await this.gmail.users.drafts.list({
+      userId: 'me',
+      maxResults,
+      q: query,
+    });
+
+    const drafts = listRes.data.drafts ?? [];
+    if (drafts.length === 0) return [];
+
+    const details = await Promise.all(
+      drafts.map((d) =>
+        this.gmail.users.drafts.get({
+          userId: 'me',
+          id: d.id!,
+          format: 'metadata',
+        })
+      )
+    );
+
+    return details.map((res) => {
+      const headers = res.data.message?.payload?.headers ?? [];
+      const get = (name: string) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+      return {
+        draftId: res.data.id ?? '',
+        messageId: res.data.message?.id ?? '',
+        threadId: res.data.message?.threadId ?? undefined,
+        subject: get('Subject'),
+        to: get('To'),
+        snippet: res.data.message?.snippet ?? '',
+      };
+    });
+  }
+
   async sendEmail(input: {
     to: string;
     subject: string;
