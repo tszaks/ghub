@@ -45,9 +45,13 @@ export interface ParsedEmail {
   snippet: string;
   from: string;
   to: string;
+  cc: string;
   subject: string;
   date: string;
   internalDate: number;
+  messageHeaderId: string;
+  inReplyTo: string;
+  references: string;
   body?: string;
   labels: string[];
   attachments: AttachmentMetadata[];
@@ -1232,9 +1236,13 @@ export class GmailAccountClient {
       snippet: message.snippet ?? '',
       from: getHeaderValue(headers, 'From'),
       to: getHeaderValue(headers, 'To'),
+      cc: getHeaderValue(headers, 'Cc'),
       subject: getHeaderValue(headers, 'Subject') || '(no subject)',
       date: getHeaderValue(headers, 'Date'),
       internalDate: Number.isFinite(internalDate) ? internalDate : 0,
+      messageHeaderId: getHeaderValue(headers, 'Message-ID'),
+      inReplyTo: getHeaderValue(headers, 'In-Reply-To'),
+      references: getHeaderValue(headers, 'References'),
       body: includeBody ? extractEmailBody(message.payload) : undefined,
       labels: message.labelIds ?? [],
       attachments,
