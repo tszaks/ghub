@@ -494,9 +494,13 @@ function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
     `**Account**: ${email.accountId} (${email.accountEmail})`,
     `**From**: ${email.from || '(unknown)'}`,
     `**To**: ${email.to || '(unknown)'}`,
+    ...(email.cc ? [`**Cc**: ${email.cc}`] : []),
     `**Date**: ${email.date || (email.internalDate ? new Date(email.internalDate).toISOString() : '(unknown)')}`,
-    `**Message ID**: ${email.id}`,
+    `**Gmail ID**: ${email.id}`,
     `**Thread ID**: ${email.threadId}`,
+    ...(email.messageHeaderId ? [`**Message-ID**: ${email.messageHeaderId}`] : []),
+    ...(email.inReplyTo ? [`**In-Reply-To**: ${email.inReplyTo}`] : []),
+    ...(email.references ? [`**References**: ${email.references}`] : []),
     `**Preview**: ${email.snippet || '(none)'}`,
   ];
 
