@@ -516,9 +516,10 @@ function formatEmailItem(email: ParsedEmail, includeBody: boolean): string {
     lines.push(`**Attachments** (${email.attachments.length}):`);
     for (const att of email.attachments) {
       lines.push(
-        `  - ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes) — id: ${att.id}`,
+        `  - ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes) — attachment_id: ${att.id}`,
       );
     }
+    lines.push(`  → To read attachment content: call get_all_attachments with account="${email.accountId}" email_id="${email.id}"`);
   }
 
   return lines.join('\n');
@@ -838,7 +839,7 @@ class GmailMultiInboxServer {
         },
         {
           name: 'get_email_thread',
-          description: 'Get a full email thread for one account (account required).',
+          description: 'Get a full email thread for one account (account required). Each message lists attachment metadata (filename, attachment_id, size). To read attachment content — PDF text, DOCX, XLSX, images via OCR — call get_all_attachments with the Gmail message ID shown as "Gmail ID" in each message.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1312,7 +1313,7 @@ class GmailMultiInboxServer {
         {
           name: 'get_attachment',
           description:
-            'Fetch a single email attachment by id. Saves to ~/Downloads/mcp-attachments/ and returns extracted text for supported formats (PDF, DOCX, XLSX, PPTX, text, images via OCR).',
+            'Fetch a single attachment by id. Use when you only need one specific file. For all attachments at once, use get_all_attachments instead. Requires the Gmail message ID ("Gmail ID" from get_email_thread) and the attachment_id. Saves to ~/Downloads/mcp-attachments/ and returns extracted text for PDF, DOCX, XLSX, PPTX, text, and images via OCR.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1330,7 +1331,7 @@ class GmailMultiInboxServer {
         {
           name: 'get_all_attachments',
           description:
-            'Fetch every attachment on an email in one call. Saves each to disk and returns extracted text for each.',
+            'Call this whenever a thread or email shows attachments. Fetches and extracts content from all attachments in one shot: PDF (text extraction), DOCX, XLSX, PPTX, images (OCR). Use the Gmail message ID ("Gmail ID" from get_email_thread output) — NOT the thread ID. Saves each file to ~/Downloads/mcp-attachments/ and returns extracted text.',
           inputSchema: {
             type: 'object',
             properties: {
