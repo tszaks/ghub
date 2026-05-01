@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist/ intentionally shipped for zero-build deploys
 *.log
 .DS_Store
 .env
