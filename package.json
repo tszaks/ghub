@@ -1,6 +1,6 @@
 {
   "name": "ghub",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Multi-inbox Gmail, Drive, Sheets, Docs, and Calendar MCP server with built-in OAuth onboarding",
   "type": "module",
   "main": "dist/index.js",
