@@ -6,6 +6,7 @@ import { AccountConfig, type AccountPaths, getAccountPaths } from './config.js';
 
 export const GMAIL_SCOPES = [
   'https://mail.google.com/',
+  'https://www.googleapis.com/auth/gmail.settings.basic',
 ] as const;
 
 export const DRIVE_METADATA_SCOPE =

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { getAccountPaths } from './config.js';
 export const GMAIL_SCOPES = [
     'https://mail.google.com/',
+    'https://www.googleapis.com/auth/gmail.settings.basic',
 ];
 export const DRIVE_METADATA_SCOPE = 'https://www.googleapis.com/auth/drive.metadata.readonly';
 export const DRIVE_FULL_SCOPE = 'https://www.googleapis.com/auth/drive';
