@@ -185,9 +185,19 @@ function extractAttachmentsMetadata(
 
   const out: AttachmentMetadata[] = [];
   const consider = (part: gmail_v1.Schema$MessagePart) => {
-    if (part.filename && part.body?.attachmentId) {
+    if (!part.filename) return;
+    if (part.body?.attachmentId) {
       out.push({
         id: part.body.attachmentId,
+        filename: part.filename,
+        contentType: part.mimeType ?? 'application/octet-stream',
+        sizeBytes: Number(part.body.size ?? 0),
+        isInline: isInlineDisposition(part.headers),
+      });
+    } else if (part.body?.data) {
+      // Small attachment inlined by Gmail — use a synthetic ID so agents can fetch it
+      out.push({
+        id: `inline:${part.filename}`,
         filename: part.filename,
         contentType: part.mimeType ?? 'application/octet-stream',
         sizeBytes: Number(part.body.size ?? 0),
@@ -221,6 +231,24 @@ function findAttachmentPart(
     const part = stack.shift();
     if (!part) continue;
     if (part.body?.attachmentId === attachmentId) return part;
+    if (part.parts?.length) stack.push(...part.parts);
+  }
+
+  return null;
+}
+
+function findAttachmentPartByFilename(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+  filename: string,
+): gmail_v1.Schema$MessagePart | null {
+  if (!payload) return null;
+  if (payload.filename === filename && payload.body?.data) return payload;
+
+  const stack: gmail_v1.Schema$MessagePart[] = payload.parts ? [...payload.parts] : [];
+  while (stack.length > 0) {
+    const part = stack.shift();
+    if (!part) continue;
+    if (part.filename === filename && part.body?.data) return part;
     if (part.parts?.length) stack.push(...part.parts);
   }
 
@@ -781,17 +809,45 @@ export class GmailAccountClient {
       format: 'full',
     });
 
-    const part = findAttachmentPart(messageResponse.data.payload, attachmentId);
+    // Handle synthetic inline IDs (small attachments Gmail embeds as body.data)
+    const isInlineId = attachmentId.startsWith('inline:');
+    let part: gmail_v1.Schema$MessagePart | null;
+
+    if (isInlineId) {
+      const filename = attachmentId.slice('inline:'.length);
+      part = findAttachmentPartByFilename(messageResponse.data.payload, filename);
+    } else {
+      part = findAttachmentPart(messageResponse.data.payload, attachmentId);
+    }
+
     if (!part || !part.filename) {
       throw new Error(
         `Attachment ${attachmentId} not found on message ${messageId}.`,
       );
     }
 
+    // If the part has inline data (no external attachmentId), decode it directly
+    if (part.body?.data && !part.body?.attachmentId) {
+      const bytes = decodeBase64UrlBuffer(part.body.data);
+      return {
+        bytes,
+        metadata: {
+          id: attachmentId,
+          filename: part.filename,
+          contentType: part.mimeType ?? 'application/octet-stream',
+          sizeBytes: Number(part.body?.size ?? bytes.length),
+          isInline: isInlineDisposition(part.headers),
+        },
+      };
+    }
+
+    // Use the FRESH attachment ID from the re-fetched message, not the (possibly stale) passed-in one
+    const freshAttachmentId = part.body?.attachmentId ?? attachmentId;
+
     const attachmentResponse = await this.gmail.users.messages.attachments.get({
       userId: 'me',
       messageId,
-      id: attachmentId,
+      id: freshAttachmentId,
     });
 
     const data = attachmentResponse.data.data;
