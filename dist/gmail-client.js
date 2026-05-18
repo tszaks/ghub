@@ -201,6 +201,14 @@ function inferContentType(filename) {
 function sanitizeHeaderValue(value) {
     return value.replace(/[\r\n"]/g, ' ').trim();
 }
+// RFC 2047 encode a header value when it contains non-ASCII characters.
+// Without this, UTF-8 bytes in subjects appear as Mojibake in email clients.
+function encodeMimeHeader(value) {
+    if (/[^\x00-\x7F]/.test(value)) {
+        return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+    }
+    return value;
+}
 async function buildRawEmailMessage(input) {
     const to = normalizeOutgoingAddressList(input.to);
     if (!to) {
@@ -210,7 +218,7 @@ async function buildRawEmailMessage(input) {
     if (attachments.length === 0) {
         const lines = [
             `To: ${to}`,
-            `Subject: ${input.subject}`,
+            `Subject: ${encodeMimeHeader(input.subject)}`,
             'MIME-Version: 1.0',
             `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
         ];
@@ -229,7 +237,7 @@ async function buildRawEmailMessage(input) {
     }
     const lines = [
         `To: ${to}`,
-        `Subject: ${input.subject}`,
+        `Subject: ${encodeMimeHeader(input.subject)}`,
         'MIME-Version: 1.0',
     ];
     const cc = normalizeOutgoingAddressList(input.cc);
