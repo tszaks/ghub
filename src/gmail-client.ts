@@ -219,6 +219,30 @@ function extractAttachmentsMetadata(
   return out;
 }
 
+function collectAttachmentParts(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+): gmail_v1.Schema$MessagePart[] {
+  if (!payload) return [];
+
+  const out: gmail_v1.Schema$MessagePart[] = [];
+  const consider = (part: gmail_v1.Schema$MessagePart) => {
+    if (part.filename && part.body?.attachmentId && !isInlineDisposition(part.headers)) {
+      out.push(part);
+    }
+  };
+
+  consider(payload);
+  const stack: gmail_v1.Schema$MessagePart[] = payload.parts ? [...payload.parts] : [];
+  while (stack.length > 0) {
+    const part = stack.shift();
+    if (!part) continue;
+    consider(part);
+    if (part.parts?.length) stack.push(...part.parts);
+  }
+
+  return out;
+}
+
 function findAttachmentPart(
   payload: gmail_v1.Schema$MessagePart | undefined,
   attachmentId: string,
@@ -804,6 +828,7 @@ export class GmailAccountClient {
   async getAttachment(
     messageId: string,
     attachmentId: string,
+    filenameHint?: string,
   ): Promise<{ bytes: Buffer; metadata: AttachmentMetadata }> {
     if (!messageId || messageId.trim() === '') {
       throw new Error('message_id is required.');
@@ -827,11 +852,28 @@ export class GmailAccountClient {
       part = findAttachmentPartByFilename(messageResponse.data.payload, filename);
     } else {
       part = findAttachmentPart(messageResponse.data.payload, attachmentId);
+
+      // Gmail rotates attachment IDs on every messages.get, so an ID obtained
+      // from an earlier fetch routinely fails exact matching. Fall back to
+      // stable identifiers: the filename, then the sole attachment part.
+      if (!part) {
+        const candidates = collectAttachmentParts(messageResponse.data.payload);
+        if (filenameHint) {
+          part = candidates.find((p) => p.filename === filenameHint) ?? null;
+        }
+        if (!part && candidates.length === 1) {
+          part = candidates[0];
+        }
+      }
     }
 
     if (!part || !part.filename) {
+      const available = extractAttachmentsMetadata(messageResponse.data.payload)
+        .map((a) => a.filename)
+        .join(', ');
       throw new Error(
-        `Attachment ${attachmentId} not found on message ${messageId}.`,
+        `Attachment ${attachmentId} not found on message ${messageId}.` +
+          (available ? ` Available attachments: ${available}.` : ''),
       );
     }
 

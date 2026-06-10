@@ -3039,7 +3039,7 @@ class GmailMultiInboxServer {
 
     const settled = await Promise.allSettled(
       list.map(async (meta) => {
-        const { bytes, metadata } = await client.getAttachment(args.email_id, meta.id);
+        const { bytes, metadata } = await client.getAttachment(args.email_id, meta.id, meta.filename);
         return saveAndExtract(bytes, metadata);
       }),
     );

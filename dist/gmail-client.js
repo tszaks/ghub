@@ -74,6 +74,27 @@ function extractAttachmentsMetadata(payload) {
     }
     return out;
 }
+function collectAttachmentParts(payload) {
+    if (!payload)
+        return [];
+    const out = [];
+    const consider = (part) => {
+        if (part.filename && part.body?.attachmentId && !isInlineDisposition(part.headers)) {
+            out.push(part);
+        }
+    };
+    consider(payload);
+    const stack = payload.parts ? [...payload.parts] : [];
+    while (stack.length > 0) {
+        const part = stack.shift();
+        if (!part)
+            continue;
+        consider(part);
+        if (part.parts?.length)
+            stack.push(...part.parts);
+    }
+    return out;
+}
 function findAttachmentPart(payload, attachmentId) {
     if (!payload)
         return null;
@@ -488,7 +509,7 @@ export class GmailAccountClient {
         });
         return extractAttachmentsMetadata(response.data.payload).filter((a) => !a.isInline);
     }
-    async getAttachment(messageId, attachmentId) {
+    async getAttachment(messageId, attachmentId, filenameHint) {
         if (!messageId || messageId.trim() === '') {
             throw new Error('message_id is required.');
         }
@@ -509,9 +530,25 @@ export class GmailAccountClient {
         }
         else {
             part = findAttachmentPart(messageResponse.data.payload, attachmentId);
+            // Gmail rotates attachment IDs on every messages.get, so an ID obtained
+            // from an earlier fetch routinely fails exact matching. Fall back to
+            // stable identifiers: the filename, then the sole attachment part.
+            if (!part) {
+                const candidates = collectAttachmentParts(messageResponse.data.payload);
+                if (filenameHint) {
+                    part = candidates.find((p) => p.filename === filenameHint) ?? null;
+                }
+                if (!part && candidates.length === 1) {
+                    part = candidates[0];
+                }
+            }
         }
         if (!part || !part.filename) {
-            throw new Error(`Attachment ${attachmentId} not found on message ${messageId}.`);
+            const available = extractAttachmentsMetadata(messageResponse.data.payload)
+                .map((a) => a.filename)
+                .join(', ');
+            throw new Error(`Attachment ${attachmentId} not found on message ${messageId}.` +
+                (available ? ` Available attachments: ${available}.` : ''));
         }
         // If the part has inline data (no external attachmentId), decode it directly
         if (part.body?.data && !part.body?.attachmentId) {
