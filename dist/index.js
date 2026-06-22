@@ -2946,7 +2946,7 @@ function resolveTransportMode() {
     return 'stdio';
 }
 async function runSseServer() {
-    const port = Number.parseInt(process.env.PORT ?? process.env.RAILWAY_PORT ?? '3000', 10);
+    const port = Number.parseInt(process.env.PORT ?? '3000', 10);
     if (!Number.isFinite(port) || port <= 0) {
         throw new Error('Invalid PORT value: ' + (process.env.PORT ?? '(missing)'));
     }
