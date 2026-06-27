@@ -2345,25 +2345,24 @@ class GmailMultiInboxServer {
         const config = await this.loadConfig();
         const account = resolveWriteAccount(config, args.account);
         const client = await this.getClientForAccount(account);
-        const list = await client.listAttachments(args.email_id);
-        const settled = await Promise.allSettled(list.map(async (meta) => {
-            const { bytes, metadata } = await client.getAttachment(args.email_id, meta.id, meta.filename);
-            return saveAndExtract(bytes, metadata);
+        const fetchResults = await client.fetchAllAttachments(args.email_id);
+        // Pair each fetch result with its metadata so the settled loop always has
+        // the attachment ID, even when saveAndExtract itself rejects.
+        const settled = await Promise.allSettled(fetchResults.map((result) => {
+            if ('error' in result)
+                return Promise.reject(new Error(result.error));
+            return saveAndExtract(result.bytes, result.metadata);
         }));
         const attachments = [];
         const errors = [];
         settled.forEach((result, index) => {
-            const originalId = list[index]?.id ?? '(unknown)';
+            const attachmentId = fetchResults[index]?.metadata.id ?? '(unknown)';
             if (result.status === 'fulfilled') {
                 attachments.push(result.value);
             }
             else {
-                errors.push({
-                    attachment_id: originalId,
-                    error: result.reason instanceof Error
-                        ? result.reason.message
-                        : String(result.reason),
-                });
+                const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+                errors.push({ attachment_id: attachmentId, error: msg });
             }
         });
         const lines = [
