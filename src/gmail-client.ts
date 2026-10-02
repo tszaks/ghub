@@ -415,6 +415,18 @@ async function buildRawEmailMessage(input: {
     throw new Error('Recipient "to" is required.');
   }
 
+  // In-Reply-To and References make a reply nest under its thread in other clients.
+  // Line breaks are removed so a value cannot add headers of its own.
+  const inReplyTo = input.inReplyTo?.replace(/[\r\n]+/g, ' ').trim();
+  const references = input.references?.replace(/[\r\n]+/g, ' ').trim();
+  const threadingHeaders: string[] = [];
+  if (inReplyTo) {
+    threadingHeaders.push(`In-Reply-To: ${inReplyTo}`);
+    threadingHeaders.push(`References: ${references || inReplyTo}`);
+  } else if (references) {
+    threadingHeaders.push(`References: ${references}`);
+  }
+
   const attachments = (input.attachments ?? []).filter((attachment) => attachment.path.trim() !== '');
 
   if (attachments.length === 0) {
@@ -431,8 +443,7 @@ async function buildRawEmailMessage(input: {
     const bcc = normalizeOutgoingAddressList(input.bcc);
     if (bcc) lines.push(`Bcc: ${bcc}`);
 
-    if (input.inReplyTo) lines.push(`In-Reply-To: ${input.inReplyTo}`);
-    if (input.references) lines.push(`References: ${input.references}`);
+    lines.push(...threadingHeaders);
 
     lines.push('', normalizeBodyNewlines(input.body));
     return encodeBase64Url(lines.join('\r\n'));
@@ -449,6 +460,8 @@ async function buildRawEmailMessage(input: {
 
   const bcc = normalizeOutgoingAddressList(input.bcc);
   if (bcc) lines.push(`Bcc: ${bcc}`);
+
+  lines.push(...threadingHeaders);
 
   const boundary = `gmail-multi-inbox-mcp-${Date.now().toString(36)}-${Math.random()
     .toString(36)
