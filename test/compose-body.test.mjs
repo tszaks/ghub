@@ -50,3 +50,18 @@ test('every attachment is present with its filename and exact bytes', async () =
   assert.match(files[1].headers['content-disposition'], /filename="notes\.txt"/);
   assert.deepEqual(files[1].body, Buffer.from('a\nb\n'), 'attachment bytes are not altered');
 });
+
+test('a non-ASCII attachment filename is RFC 2047 encoded', async () => {
+  const file = await tempFile('notes.txt', 'x');
+  const msg = parseRaw(
+    await createRawEmailMessage({
+      to: 'someone@example.com',
+      subject: 'Hi',
+      body: 'b',
+      attachments: [{ path: file, filename: 'Σημειώσεις.txt' }],
+    })
+  );
+  const encoded = `=?UTF-8?B?${Buffer.from('Σημειώσεις.txt').toString('base64')}?=`;
+  assert.ok(msg.parts[1].headers['content-disposition'].includes(`filename="${encoded}"`));
+  assert.ok(msg.parts[1].headers['content-type'].includes(`name="${encoded}"`));
+});

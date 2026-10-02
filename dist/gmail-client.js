@@ -223,7 +223,7 @@ function sanitizeHeaderValue(value) {
     return value.replace(/[\r\n"]/g, ' ').trim();
 }
 // RFC 2047 encode a header value when it contains non-ASCII characters.
-// Without this, UTF-8 bytes in subjects appear as Mojibake in email clients.
+// Without this, UTF-8 bytes in subjects and filenames appear as Mojibake in email clients.
 function encodeMimeHeader(value) {
     if (/[^\x00-\x7F]/.test(value)) {
         return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
@@ -282,7 +282,8 @@ async function buildRawEmailMessage(input) {
         const fileBuffer = await fs.readFile(filePath);
         const filename = sanitizeHeaderValue(attachment.filename?.trim() || path.basename(filePath));
         const contentType = attachment.contentType?.trim() || inferContentType(filename);
-        lines.push(`--${boundary}`, `Content-Type: ${contentType}; name="${filename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${filename}"`, '', wrapBase64(fileBuffer.toString('base64')));
+        const encodedFilename = encodeMimeHeader(filename);
+        lines.push(`--${boundary}`, `Content-Type: ${contentType}; name="${encodedFilename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${encodedFilename}"`, '', wrapBase64(fileBuffer.toString('base64')));
     }
     lines.push(`--${boundary}--`);
     return encodeBase64Url(lines.join('\r\n'));
