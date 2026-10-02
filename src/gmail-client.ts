@@ -393,6 +393,12 @@ function encodeMimeHeader(value: string): string {
   return value;
 }
 
+// MIME requires CRLF line endings. A body with bare LF renders as a single
+// paragraph in Outlook and Exchange.
+function normalizeBodyNewlines(body: string): string {
+  return body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
+}
+
 async function buildRawEmailMessage(input: {
   to: string;
   subject: string;
@@ -428,7 +434,7 @@ async function buildRawEmailMessage(input: {
     if (input.inReplyTo) lines.push(`In-Reply-To: ${input.inReplyTo}`);
     if (input.references) lines.push(`References: ${input.references}`);
 
-    lines.push('', input.body);
+    lines.push('', normalizeBodyNewlines(input.body));
     return encodeBase64Url(lines.join('\r\n'));
   }
 
@@ -454,7 +460,7 @@ async function buildRawEmailMessage(input: {
     `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`,
     'Content-Transfer-Encoding: base64',
     '',
-    wrapBase64(Buffer.from(input.body, 'utf8').toString('base64'))
+    wrapBase64(Buffer.from(normalizeBodyNewlines(input.body), 'utf8').toString('base64'))
   );
 
   for (const attachment of attachments) {
@@ -490,7 +496,7 @@ function normalizeAttachments(attachments?: EmailAttachment[]): EmailAttachment[
     .filter((attachment) => attachment.path !== '');
 }
 
-async function createRawEmailMessage(input: {
+export async function createRawEmailMessage(input: {
   to: string;
   subject: string;
   body: string;

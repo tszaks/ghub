@@ -230,6 +230,11 @@ function encodeMimeHeader(value) {
     }
     return value;
 }
+// MIME requires CRLF line endings. A body with bare LF renders as a single
+// paragraph in Outlook and Exchange.
+function normalizeBodyNewlines(body) {
+    return body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
+}
 async function buildRawEmailMessage(input) {
     const to = normalizeOutgoingAddressList(input.to);
     if (!to) {
@@ -253,7 +258,7 @@ async function buildRawEmailMessage(input) {
             lines.push(`In-Reply-To: ${input.inReplyTo}`);
         if (input.references)
             lines.push(`References: ${input.references}`);
-        lines.push('', input.body);
+        lines.push('', normalizeBodyNewlines(input.body));
         return encodeBase64Url(lines.join('\r\n'));
     }
     const lines = [
@@ -271,7 +276,7 @@ async function buildRawEmailMessage(input) {
         .toString(36)
         .slice(2, 10)}`;
     lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '');
-    lines.push(`--${boundary}`, `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', wrapBase64(Buffer.from(input.body, 'utf8').toString('base64')));
+    lines.push(`--${boundary}`, `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', wrapBase64(Buffer.from(normalizeBodyNewlines(input.body), 'utf8').toString('base64')));
     for (const attachment of attachments) {
         const filePath = attachment.path.trim();
         const fileBuffer = await fs.readFile(filePath);
@@ -291,7 +296,7 @@ function normalizeAttachments(attachments) {
     }))
         .filter((attachment) => attachment.path !== '');
 }
-async function createRawEmailMessage(input) {
+export async function createRawEmailMessage(input) {
     return buildRawEmailMessage({
         ...input,
         attachments: normalizeAttachments(input.attachments),
