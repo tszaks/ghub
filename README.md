@@ -416,6 +416,9 @@ Send an email from a specific account.
   - `path` (required): Absolute or local filesystem path
   - `filename` (optional): Override the filename shown in Gmail
   - `content_type` (optional): Override the MIME type, for example `application/pdf`
+- `thread_id` (optional): Send as a reply in this Gmail thread
+- `in_reply_to` (optional): Message-ID being replied to. Derived from `thread_id` when omitted
+- `references` (optional): References header value. Derived from `thread_id` when omitted
 
 **Returns:** Sent message details
 

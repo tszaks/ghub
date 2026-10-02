@@ -684,6 +684,24 @@ const WORKSPACE_EXPORT_MAP: Record<string, { exportMime: string; ext: string; co
   },
 };
 
+// Work out In-Reply-To and References for a reply from the messages of its thread.
+// Drafts are skipped: they have a Message-ID too, and pointing a reply at a draft
+// that is later deleted leaves recipients with an orphaned reference.
+export function threadingHeadersFromThread(
+  messages: gmail_v1.Schema$Message[]
+): { inReplyTo?: string; references?: string } {
+  const sent = messages.filter((message) => !(message.labelIds ?? []).includes('DRAFT'));
+  const last = sent[sent.length - 1];
+  if (!last) return {};
+  const messageId = getHeaderValue(last.payload?.headers, 'Message-ID');
+  if (!messageId) return {};
+  const existing = getHeaderValue(last.payload?.headers, 'References');
+  return {
+    inReplyTo: messageId,
+    references: existing ? `${existing} ${messageId}` : messageId,
+  };
+}
+
 export class GmailAccountClient {
   readonly account: AccountConfig;
   readonly paths: AccountPaths;
@@ -1269,6 +1287,25 @@ export class GmailAccountClient {
     return result;
   }
 
+  // When only a thread ID is given, derive the threading headers from that thread so
+  // the reply nests for recipients outside Gmail as well (Gmail uses threadId alone).
+  private async resolveThreadingHeaders(input: {
+    threadId?: string;
+    inReplyTo?: string;
+    references?: string;
+  }): Promise<{ inReplyTo?: string; references?: string }> {
+    if (!input.threadId || input.inReplyTo) {
+      return { inReplyTo: input.inReplyTo, references: input.references };
+    }
+    const response = await this.gmail.users.threads.get({
+      userId: 'me',
+      id: input.threadId,
+      format: 'metadata',
+      metadataHeaders: ['Message-ID', 'References'],
+    });
+    return threadingHeadersFromThread(response.data.messages ?? []);
+  }
+
   async createDraft(input: {
     to: string;
     subject: string;
@@ -1281,7 +1318,7 @@ export class GmailAccountClient {
     inReplyTo?: string;
     references?: string;
   }): Promise<{ draftId: string; threadId?: string }> {
-    const raw = await createRawEmailMessage(input);
+    const raw = await createRawEmailMessage({ ...input, ...(await this.resolveThreadingHeaders(input)) });
 
     const message: { raw: string; threadId?: string } = { raw };
     if (input.threadId) message.threadId = input.threadId;
@@ -1402,12 +1439,18 @@ export class GmailAccountClient {
     bcc?: string;
     html?: boolean;
     attachments?: EmailAttachment[];
+    threadId?: string;
+    inReplyTo?: string;
+    references?: string;
   }): Promise<{ messageId: string; threadId?: string }> {
-    const raw = await createRawEmailMessage(input);
+    const raw = await createRawEmailMessage({ ...input, ...(await this.resolveThreadingHeaders(input)) });
+
+    const requestBody: { raw: string; threadId?: string } = { raw };
+    if (input.threadId) requestBody.threadId = input.threadId;
 
     const response = await this.gmail.users.messages.send({
       userId: 'me',
-      requestBody: { raw },
+      requestBody,
     });
 
     return {
