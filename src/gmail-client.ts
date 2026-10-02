@@ -1,6 +1,7 @@
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { google, type calendar_v3, type docs_v1, type drive_v3, type gmail_v1, type sheets_v4 } from 'googleapis';
 import { promises as fs, createReadStream } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { AccountConfig, type AccountPaths, getAccountPaths } from './config.js';
 
@@ -399,6 +400,35 @@ function normalizeBodyNewlines(body: string): string {
   return body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
 }
 
+// Resolve and check an attachment path before anything is sent. A file that cannot be
+// read must fail the message rather than be left out of it.
+async function readAttachmentFile(rawPath: string): Promise<{ filePath: string; data: Buffer }> {
+  let filePath = rawPath.trim();
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = path.join(os.homedir(), filePath.slice(1));
+  }
+  if (!path.isAbsolute(filePath)) {
+    throw new Error(`Cannot attach "${rawPath}": the path must be absolute.`);
+  }
+
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'no such file' : String(error);
+    throw new Error(`Cannot attach "${rawPath}": ${reason}.`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Cannot attach "${rawPath}": it is not a regular file.`);
+  }
+
+  try {
+    return { filePath, data: await fs.readFile(filePath) };
+  } catch (error) {
+    throw new Error(`Cannot attach "${rawPath}": ${String(error)}.`);
+  }
+}
+
 async function buildRawEmailMessage(input: {
   to: string;
   subject: string;
@@ -477,8 +507,7 @@ async function buildRawEmailMessage(input: {
   );
 
   for (const attachment of attachments) {
-    const filePath = attachment.path.trim();
-    const fileBuffer = await fs.readFile(filePath);
+    const { filePath, data: fileBuffer } = await readAttachmentFile(attachment.path);
     const filename = sanitizeHeaderValue(
       attachment.filename?.trim() || path.basename(filePath)
     );

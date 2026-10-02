@@ -1,6 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import { google } from 'googleapis';
 import { promises as fs, createReadStream } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getAccountPaths } from './config.js';
 export const GMAIL_SCOPES = [
@@ -235,6 +236,34 @@ function encodeMimeHeader(value) {
 function normalizeBodyNewlines(body) {
     return body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
 }
+// Resolve and check an attachment path before anything is sent. A file that cannot be
+// read must fail the message rather than be left out of it.
+async function readAttachmentFile(rawPath) {
+    let filePath = rawPath.trim();
+    if (filePath === '~' || filePath.startsWith('~/')) {
+        filePath = path.join(os.homedir(), filePath.slice(1));
+    }
+    if (!path.isAbsolute(filePath)) {
+        throw new Error(`Cannot attach "${rawPath}": the path must be absolute.`);
+    }
+    let stat;
+    try {
+        stat = await fs.stat(filePath);
+    }
+    catch (error) {
+        const reason = error.code === 'ENOENT' ? 'no such file' : String(error);
+        throw new Error(`Cannot attach "${rawPath}": ${reason}.`);
+    }
+    if (!stat.isFile()) {
+        throw new Error(`Cannot attach "${rawPath}": it is not a regular file.`);
+    }
+    try {
+        return { filePath, data: await fs.readFile(filePath) };
+    }
+    catch (error) {
+        throw new Error(`Cannot attach "${rawPath}": ${String(error)}.`);
+    }
+}
 async function buildRawEmailMessage(input) {
     const to = normalizeOutgoingAddressList(input.to);
     if (!to) {
@@ -288,8 +317,7 @@ async function buildRawEmailMessage(input) {
     lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '');
     lines.push(`--${boundary}`, `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', wrapBase64(Buffer.from(normalizeBodyNewlines(input.body), 'utf8').toString('base64')));
     for (const attachment of attachments) {
-        const filePath = attachment.path.trim();
-        const fileBuffer = await fs.readFile(filePath);
+        const { filePath, data: fileBuffer } = await readAttachmentFile(attachment.path);
         const filename = sanitizeHeaderValue(attachment.filename?.trim() || path.basename(filePath));
         const contentType = attachment.contentType?.trim() || inferContentType(filename);
         const encodedFilename = encodeMimeHeader(filename);

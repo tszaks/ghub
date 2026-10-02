@@ -413,7 +413,7 @@ Send an email from a specific account.
 - `bcc` (optional): BCC recipients
 - `html` (optional, default: false): Send as HTML
 - `attachments` (optional): Array of local file attachments. Each item supports:
-  - `path` (required): Absolute or local filesystem path
+  - `path` (required): Absolute path to the file (a leading `~` is expanded). A plain path string is also accepted in place of the object. A path that cannot be read fails the call instead of sending without it
   - `filename` (optional): Override the filename shown in Gmail
   - `content_type` (optional): Override the MIME type, for example `application/pdf`
 - `thread_id` (optional): Send as a reply in this Gmail thread
