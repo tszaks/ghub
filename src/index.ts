@@ -41,6 +41,11 @@ import {
   type ParsedEmail,
   type SpreadsheetMetadata,
 } from './gmail-client.js';
+import {
+  type OutgoingEmailAttachmentArgs,
+  assertKnownOutgoingEmailArgs,
+  valueToAttachmentArray,
+} from './outgoing-email.js';
 import { saveAndExtract, type AttachmentContent } from './attachments.js';
 
 interface ReadEmailsArgs {
@@ -106,12 +111,9 @@ interface OutgoingEmailArgs {
   bcc?: string;
   html?: boolean;
   attachments?: OutgoingEmailAttachmentArgs[];
-}
-
-interface OutgoingEmailAttachmentArgs {
-  path: string;
-  filename?: string;
-  content_type?: string;
+  thread_id?: string;
+  in_reply_to?: string;
+  references?: string;
 }
 
 interface BeginAuthArgs {
@@ -417,25 +419,6 @@ function valueToNumber(value: unknown, fallback: number): number {
 function valueToStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item)).map((item) => item.trim()).filter(Boolean);
-}
-
-function valueToAttachmentArray(value: unknown): OutgoingEmailAttachmentArgs[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const candidate = item as Record<string, unknown>;
-    const filePath = valueToString(candidate.path).trim();
-    if (!filePath) return [];
-
-    return [
-      {
-        path: filePath,
-        filename: valueToString(candidate.filename, '').trim() || undefined,
-        content_type: valueToString(candidate.content_type, '').trim() || undefined,
-      },
-    ];
-  });
 }
 
 function emailDateForSort(email: ParsedEmail): number {
@@ -1129,7 +1112,7 @@ class GmailMultiInboxServer {
                 items: {
                   type: 'object',
                   properties: {
-                    path: { type: 'string', description: 'Absolute or local filesystem path.' },
+                    path: { type: 'string', description: 'Absolute path to the file (a leading ~ is expanded).' },
                     filename: {
                       type: 'string',
                       description: 'Optional override filename shown in Gmail.',
@@ -1149,11 +1132,11 @@ class GmailMultiInboxServer {
               },
               in_reply_to: {
                 type: 'string',
-                description: 'Optional RFC 2822 Message-ID of the email being replied to. Sets the In-Reply-To header for proper threading.',
+                description: 'Optional RFC 2822 Message-ID of the email being replied to. Sets the In-Reply-To header for proper threading. Derived from thread_id when omitted.',
               },
               references: {
                 type: 'string',
-                description: 'Optional RFC 2822 References header value for threading.',
+                description: 'Optional RFC 2822 References header value for threading. Derived from thread_id when omitted.',
               },
             },
             required: ['account', 'to', 'subject', 'body'],
@@ -1240,7 +1223,7 @@ class GmailMultiInboxServer {
                 items: {
                   type: 'object',
                   properties: {
-                    path: { type: 'string', description: 'Absolute or local filesystem path.' },
+                    path: { type: 'string', description: 'Absolute path to the file (a leading ~ is expanded).' },
                     filename: {
                       type: 'string',
                       description: 'Optional override filename shown in Gmail.',
@@ -1253,6 +1236,18 @@ class GmailMultiInboxServer {
                   required: ['path'],
                   additionalProperties: false,
                 },
+              },
+              thread_id: {
+                type: 'string',
+                description: 'Optional Gmail thread ID. When set, the email is sent as a reply in that thread.',
+              },
+              in_reply_to: {
+                type: 'string',
+                description: 'Optional RFC 2822 Message-ID of the email being replied to. Derived from thread_id when omitted.',
+              },
+              references: {
+                type: 'string',
+                description: 'Optional RFC 2822 References header value for threading. Derived from thread_id when omitted.',
               },
             },
             required: ['account', 'to', 'subject', 'body'],
@@ -2682,6 +2677,7 @@ class GmailMultiInboxServer {
   }
 
   private async handleCreateDraft(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    assertKnownOutgoingEmailArgs(rawArgs);
     const args: OutgoingEmailArgs = {
       account: valueToString(rawArgs.account),
       to: valueToString(rawArgs.to),
@@ -2804,6 +2800,7 @@ class GmailMultiInboxServer {
   }
 
   private async handleSendEmail(rawArgs: Record<string, unknown>): Promise<CallToolResult> {
+    assertKnownOutgoingEmailArgs(rawArgs);
     const args: OutgoingEmailArgs = {
       account: valueToString(rawArgs.account),
       to: valueToString(rawArgs.to),
@@ -2813,6 +2810,9 @@ class GmailMultiInboxServer {
       bcc: valueToString(rawArgs.bcc, '') || undefined,
       html: valueToBoolean(rawArgs.html, false),
       attachments: valueToAttachmentArray(rawArgs.attachments),
+      thread_id: valueToString(rawArgs.thread_id, '') || undefined,
+      in_reply_to: valueToString(rawArgs.in_reply_to, '') || undefined,
+      references: valueToString(rawArgs.references, '') || undefined,
     };
 
     const config = await this.loadConfig();
@@ -2831,6 +2831,9 @@ class GmailMultiInboxServer {
         filename: attachment.filename,
         contentType: attachment.content_type,
       })),
+      threadId: args.thread_id,
+      inReplyTo: args.in_reply_to,
+      references: args.references,
     });
 
     return textResult(

@@ -1,6 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import { google } from 'googleapis';
 import { promises as fs, createReadStream } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getAccountPaths } from './config.js';
 export const GMAIL_SCOPES = [
@@ -223,17 +224,62 @@ function sanitizeHeaderValue(value) {
     return value.replace(/[\r\n"]/g, ' ').trim();
 }
 // RFC 2047 encode a header value when it contains non-ASCII characters.
-// Without this, UTF-8 bytes in subjects appear as Mojibake in email clients.
+// Without this, UTF-8 bytes in subjects and filenames appear as Mojibake in email clients.
 function encodeMimeHeader(value) {
     if (/[^\x00-\x7F]/.test(value)) {
         return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
     }
     return value;
 }
+// MIME requires CRLF line endings. A body with bare LF renders as a single
+// paragraph in Outlook and Exchange.
+function normalizeBodyNewlines(body) {
+    return body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
+}
+// Resolve and check an attachment path before anything is sent. A file that cannot be
+// read must fail the message rather than be left out of it.
+async function readAttachmentFile(rawPath) {
+    let filePath = rawPath.trim();
+    if (filePath === '~' || filePath.startsWith('~/')) {
+        filePath = path.join(os.homedir(), filePath.slice(1));
+    }
+    if (!path.isAbsolute(filePath)) {
+        throw new Error(`Cannot attach "${rawPath}": the path must be absolute.`);
+    }
+    let stat;
+    try {
+        stat = await fs.stat(filePath);
+    }
+    catch (error) {
+        const reason = error.code === 'ENOENT' ? 'no such file' : String(error);
+        throw new Error(`Cannot attach "${rawPath}": ${reason}.`);
+    }
+    if (!stat.isFile()) {
+        throw new Error(`Cannot attach "${rawPath}": it is not a regular file.`);
+    }
+    try {
+        return { filePath, data: await fs.readFile(filePath) };
+    }
+    catch (error) {
+        throw new Error(`Cannot attach "${rawPath}": ${String(error)}.`);
+    }
+}
 async function buildRawEmailMessage(input) {
     const to = normalizeOutgoingAddressList(input.to);
     if (!to) {
         throw new Error('Recipient "to" is required.');
+    }
+    // In-Reply-To and References make a reply nest under its thread in other clients.
+    // Line breaks are removed so a value cannot add headers of its own.
+    const inReplyTo = input.inReplyTo?.replace(/[\r\n]+/g, ' ').trim();
+    const references = input.references?.replace(/[\r\n]+/g, ' ').trim();
+    const threadingHeaders = [];
+    if (inReplyTo) {
+        threadingHeaders.push(`In-Reply-To: ${inReplyTo}`);
+        threadingHeaders.push(`References: ${references || inReplyTo}`);
+    }
+    else if (references) {
+        threadingHeaders.push(`References: ${references}`);
     }
     const attachments = (input.attachments ?? []).filter((attachment) => attachment.path.trim() !== '');
     if (attachments.length === 0) {
@@ -249,11 +295,8 @@ async function buildRawEmailMessage(input) {
         const bcc = normalizeOutgoingAddressList(input.bcc);
         if (bcc)
             lines.push(`Bcc: ${bcc}`);
-        if (input.inReplyTo)
-            lines.push(`In-Reply-To: ${input.inReplyTo}`);
-        if (input.references)
-            lines.push(`References: ${input.references}`);
-        lines.push('', input.body);
+        lines.push(...threadingHeaders);
+        lines.push('', normalizeBodyNewlines(input.body));
         return encodeBase64Url(lines.join('\r\n'));
     }
     const lines = [
@@ -267,17 +310,18 @@ async function buildRawEmailMessage(input) {
     const bcc = normalizeOutgoingAddressList(input.bcc);
     if (bcc)
         lines.push(`Bcc: ${bcc}`);
+    lines.push(...threadingHeaders);
     const boundary = `gmail-multi-inbox-mcp-${Date.now().toString(36)}-${Math.random()
         .toString(36)
         .slice(2, 10)}`;
     lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, '');
-    lines.push(`--${boundary}`, `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', wrapBase64(Buffer.from(input.body, 'utf8').toString('base64')));
+    lines.push(`--${boundary}`, `Content-Type: text/${input.html ? 'html' : 'plain'}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', wrapBase64(Buffer.from(normalizeBodyNewlines(input.body), 'utf8').toString('base64')));
     for (const attachment of attachments) {
-        const filePath = attachment.path.trim();
-        const fileBuffer = await fs.readFile(filePath);
+        const { filePath, data: fileBuffer } = await readAttachmentFile(attachment.path);
         const filename = sanitizeHeaderValue(attachment.filename?.trim() || path.basename(filePath));
         const contentType = attachment.contentType?.trim() || inferContentType(filename);
-        lines.push(`--${boundary}`, `Content-Type: ${contentType}; name="${filename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${filename}"`, '', wrapBase64(fileBuffer.toString('base64')));
+        const encodedFilename = encodeMimeHeader(filename);
+        lines.push(`--${boundary}`, `Content-Type: ${contentType}; name="${encodedFilename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${encodedFilename}"`, '', wrapBase64(fileBuffer.toString('base64')));
     }
     lines.push(`--${boundary}--`);
     return encodeBase64Url(lines.join('\r\n'));
@@ -291,7 +335,7 @@ function normalizeAttachments(attachments) {
     }))
         .filter((attachment) => attachment.path !== '');
 }
-async function createRawEmailMessage(input) {
+export async function createRawEmailMessage(input) {
     return buildRawEmailMessage({
         ...input,
         attachments: normalizeAttachments(input.attachments),
@@ -390,6 +434,23 @@ const WORKSPACE_EXPORT_MAP = {
         contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     },
 };
+// Work out In-Reply-To and References for a reply from the messages of its thread.
+// Drafts are skipped: they have a Message-ID too, and pointing a reply at a draft
+// that is later deleted leaves recipients with an orphaned reference.
+export function threadingHeadersFromThread(messages) {
+    const sent = messages.filter((message) => !(message.labelIds ?? []).includes('DRAFT'));
+    const last = sent[sent.length - 1];
+    if (!last)
+        return {};
+    const messageId = getHeaderValue(last.payload?.headers, 'Message-ID');
+    if (!messageId)
+        return {};
+    const existing = getHeaderValue(last.payload?.headers, 'References');
+    return {
+        inReplyTo: messageId,
+        references: existing ? `${existing} ${messageId}` : messageId,
+    };
+}
 export class GmailAccountClient {
     account;
     paths;
@@ -851,8 +912,22 @@ export class GmailAccountClient {
         }
         return result;
     }
+    // When only a thread ID is given, derive the threading headers from that thread so
+    // the reply nests for recipients outside Gmail as well (Gmail uses threadId alone).
+    async resolveThreadingHeaders(input) {
+        if (!input.threadId || input.inReplyTo) {
+            return { inReplyTo: input.inReplyTo, references: input.references };
+        }
+        const response = await this.gmail.users.threads.get({
+            userId: 'me',
+            id: input.threadId,
+            format: 'metadata',
+            metadataHeaders: ['Message-ID', 'References'],
+        });
+        return threadingHeadersFromThread(response.data.messages ?? []);
+    }
     async createDraft(input) {
-        const raw = await createRawEmailMessage(input);
+        const raw = await createRawEmailMessage({ ...input, ...(await this.resolveThreadingHeaders(input)) });
         const message = { raw };
         if (input.threadId)
             message.threadId = input.threadId;
@@ -940,10 +1015,13 @@ export class GmailAccountClient {
         });
     }
     async sendEmail(input) {
-        const raw = await createRawEmailMessage(input);
+        const raw = await createRawEmailMessage({ ...input, ...(await this.resolveThreadingHeaders(input)) });
+        const requestBody = { raw };
+        if (input.threadId)
+            requestBody.threadId = input.threadId;
         const response = await this.gmail.users.messages.send({
             userId: 'me',
-            requestBody: { raw },
+            requestBody,
         });
         return {
             messageId: response.data.id ?? '',
