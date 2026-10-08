@@ -1,4 +1,4 @@
-import { OAuth2Client } from 'google-auth-library';
+import { DefaultTransporter, OAuth2Client } from 'google-auth-library';
 import { google } from 'googleapis';
 import { promises as fs, createReadStream } from 'node:fs';
 import os from 'node:os';
@@ -20,6 +20,51 @@ export const GOOGLE_ACCOUNT_SCOPES = [
     DOCS_SCOPE,
     CALENDAR_SCOPE,
 ];
+let cliTransportOptions;
+/** Opt in before constructing CLI clients; leave unset for legacy MCP behavior. */
+export function configureCliTransport(options) {
+    if (options && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) {
+        throw new Error('CLI request timeout must be a positive integer.');
+    }
+    cliTransportOptions = options ? { ...options } : undefined;
+}
+export function getCliRequestTimeout() {
+    return cliTransportOptions?.timeoutMs;
+}
+class CliTransporter extends DefaultTransporter {
+    timeoutMs;
+    constructor(timeoutMs) {
+        super();
+        this.timeoutMs = timeoutMs;
+        this.defaults = { timeout: timeoutMs, retry: false };
+    }
+    request(options) {
+        // OAuth token/refresh methods pass retry:true explicitly, overriding defaults.
+        // Enforce the CLI policy at the shared transport boundary for every request.
+        return super.request({
+            ...options,
+            timeout: this.timeoutMs,
+            retry: false,
+            retryConfig: { retry: 0, noResponseRetries: 0, shouldRetry: () => false },
+        });
+    }
+}
+class CliOAuth2Client extends OAuth2Client {
+    request(options, callback) {
+        // Resolve/refresh credentials before sending via public auth APIs. The base
+        // request() can refresh and replay 401/403 responses even with retry:false,
+        // particularly for cached tokens without expiry_date. Never replay CLI calls.
+        const result = this.getRequestHeaders(options.url?.toString()).then((authHeaders) => {
+            const headers = { ...options.headers, ...authHeaders };
+            if (this.apiKey)
+                headers['X-Goog-Api-Key'] = this.apiKey;
+            return this.transporter.request({ ...options, headers });
+        });
+        if (!callback)
+            return result;
+        void result.then((response) => callback(null, response), (error) => callback(error, error.response));
+    }
+}
 function decodeBase64Url(value) {
     const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
@@ -351,6 +396,14 @@ export function createOAuthClientFromCredentials(options) {
         throw new Error('Credentials must include client_id and client_secret under "installed" or "web".');
     }
     const redirectUri = source.redirect_uris?.[0] ?? 'http://localhost';
+    if (cliTransportOptions) {
+        return new CliOAuth2Client({
+            clientId: source.client_id,
+            clientSecret: source.client_secret,
+            redirectUri,
+            transporter: new CliTransporter(cliTransportOptions.timeoutMs),
+        });
+    }
     return new OAuth2Client(source.client_id, source.client_secret, redirectUri);
 }
 export async function readCredentialsFile(credentialsPath) {
@@ -392,7 +445,7 @@ export function buildDriveSearchQuery(query) {
     return `trashed = false and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
 }
 export function describeDriveApiError(error, fallback) {
-    const googleError = error;
+    const googleError = (error ?? {});
     const message = googleError.response?.data?.error?.message || googleError.message || fallback;
     const details = googleError.response?.data?.error?.details ?? [];
     const serviceDisabled = details.find((detail) => detail.reason === 'SERVICE_DISABLED');
@@ -416,6 +469,20 @@ export function describeDriveApiError(error, fallback) {
         ].join(' ');
     }
     return message;
+}
+function wrapDriveApiError(error, fallback) {
+    const source = error;
+    const status = source?.response?.status ?? source?.status ??
+        (typeof source?.code === 'number' ? source.code : undefined);
+    const wrapped = new Error(describeDriveApiError(error, fallback), { cause: error });
+    // Preserve classification, not provider headers, bodies, or request credentials.
+    if (typeof source?.code === 'string' || typeof source?.code === 'number') {
+        Object.assign(wrapped, { code: source.code });
+    }
+    if (typeof status === 'number') {
+        Object.assign(wrapped, { status, response: { status } });
+    }
+    return wrapped;
 }
 const WORKSPACE_EXPORT_MAP = {
     'application/vnd.google-apps.document': {
@@ -534,30 +601,35 @@ export class GmailAccountClient {
             }));
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive search failed.'));
+            throw wrapDriveApiError(error, 'Drive search failed.');
         }
     }
     async fetchMessages(query, maxResults, includeBody) {
+        return (await this.readEmailPage(query, maxResults, includeBody)).emails;
+    }
+    /** One Gmail page. Tokens are account/query-specific; no hidden auto-pagination. */
+    async readEmailPage(query, maxResults, includeBody, pageToken) {
         const boundedMax = Math.max(1, Math.min(maxResults, 500));
         const listResponse = await this.gmail.users.messages.list({
             userId: 'me',
             q: query.trim() === '' ? undefined : query,
             maxResults: boundedMax,
+            pageToken,
         });
         const messageIds = (listResponse.data.messages ?? [])
             .map((message) => message.id)
             .filter((id) => Boolean(id));
-        if (messageIds.length === 0) {
-            return [];
+        // Limit in-flight requests while retaining Gmail page order and a bounded page.
+        const emails = [];
+        for (let offset = 0; offset < messageIds.length; offset += 10) {
+            const messages = await Promise.all(messageIds.slice(offset, offset + 10).map((id) => this.gmail.users.messages.get({ userId: 'me', id, format: 'full' })));
+            emails.push(...messages.map((response) => this.parseMessage(response.data, includeBody)));
         }
-        const fullMessages = await Promise.all(messageIds.map((messageId) => this.gmail.users.messages.get({
-            userId: 'me',
-            id: messageId,
-            format: 'full',
-        })));
-        return fullMessages
-            .map((response) => this.parseMessage(response.data, includeBody))
-            .sort((a, b) => b.internalDate - a.internalDate);
+        return {
+            emails: emails.sort((a, b) => b.internalDate - a.internalDate),
+            nextPageToken: listResponse.data.nextPageToken ?? undefined,
+            resultSizeEstimate: listResponse.data.resultSizeEstimate ?? emails.length,
+        };
     }
     async listAttachments(messageId) {
         if (!messageId || messageId.trim() === '') {
@@ -1086,7 +1158,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive list failed.'));
+            throw wrapDriveApiError(error, 'Drive list failed.');
         }
     }
     async getDriveFile(fileId) {
@@ -1118,7 +1190,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive file get failed.'));
+            throw wrapDriveApiError(error, 'Drive file get failed.');
         }
     }
     async getDriveFileContent(fileId) {
@@ -1143,7 +1215,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive file download failed.'));
+            throw wrapDriveApiError(error, 'Drive file download failed.');
         }
     }
     async uploadDriveFile(input) {
@@ -1181,7 +1253,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive upload failed.'));
+            throw wrapDriveApiError(error, 'Drive upload failed.');
         }
     }
     async createDriveFolder(name, parentId) {
@@ -1212,7 +1284,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Create folder failed.'));
+            throw wrapDriveApiError(error, 'Create folder failed.');
         }
     }
     async updateDriveFile(fileId, updates) {
@@ -1247,7 +1319,7 @@ export class GmailAccountClient {
             };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive file update failed.'));
+            throw wrapDriveApiError(error, 'Drive file update failed.');
         }
     }
     async trashDriveFile(fileId) {
@@ -1261,7 +1333,7 @@ export class GmailAccountClient {
             });
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive trash failed.'));
+            throw wrapDriveApiError(error, 'Drive trash failed.');
         }
     }
     async shareDriveFile(fileId, input) {
@@ -1278,7 +1350,7 @@ export class GmailAccountClient {
             return { permissionId: response.data.id ?? '' };
         }
         catch (error) {
-            throw new Error(describeDriveApiError(error, 'Drive share failed.'));
+            throw wrapDriveApiError(error, 'Drive share failed.');
         }
     }
     // ─── Sheets ──────────────────────────────────────────────────────────────
