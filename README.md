@@ -6,6 +6,24 @@
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
 
+## Agent CLI
+
+All 60 Gmail, Drive, Sheets, Docs, Calendar, and account tools are also available
+as noninteractive CLI calls with structured JSON, schema discovery, bounded
+output, and explicit error/exit codes:
+
+```sh
+ghub tools
+ghub schema search_emails
+ghub call list_accounts
+```
+
+See the [agent CLI quickstart](docs/agent-cli.md) for input files/stdin,
+pagination, validation-only dry runs, and OAuth setup. CLI and MCP share the
+same accounts and Google clients. Bare `ghub` and `ghub mcp` still start MCP;
+use `ghub --help` for JSON CLI help. From a built checkout, commands can also
+be run with `node dist/index.js` in place of `ghub`.
+
 ## Why This MCP Server?
 
 Unlike existing Gmail MCP servers, this implementation offers:
@@ -19,6 +37,7 @@ Unlike existing Gmail MCP servers, this implementation offers:
 
 ## Table of Contents
 
+- [Agent CLI](#agent-cli)
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -62,7 +81,8 @@ Unlike existing Gmail MCP servers, this implementation offers:
 ## Prerequisites
 
 - **Node.js 20+** ([Download](https://nodejs.org/))
-- **A Google Cloud Project** with Gmail API enabled
+- **A Google Cloud Project** with Gmail API enabled, plus Drive, Sheets, Docs,
+  and Calendar APIs for the corresponding tools
 - **OAuth 2.0 Credentials** (Desktop application type)
 
 ## Installation
@@ -94,6 +114,8 @@ Before using this MCP server, you need to set up a Google Cloud project:
 1. In your project, go to **APIs & Services** > **Library**
 2. Search for "Gmail API"
 3. Click **Enable**
+4. Enable Google Drive, Google Sheets, Google Docs, and Google Calendar APIs
+   for the corresponding tools you plan to use.
 
 ### 3. Create OAuth 2.0 Credentials
 
@@ -111,11 +133,17 @@ Before using this MCP server, you need to set up a Google Cloud project:
 ### 4. OAuth Consent Screen Setup
 
 1. Go to **APIs & Services** > **OAuth consent screen**
-2. Add the following scopes:
-   - `https://www.googleapis.com/auth/gmail.modify`
-   - `https://www.googleapis.com/auth/gmail.send`
-   - `https://www.googleapis.com/auth/userinfo.email`
+2. Review the existing broad scopes requested by GHub:
+   - `https://mail.google.com/`
+   - `https://www.googleapis.com/auth/gmail.settings.basic`
+   - `https://www.googleapis.com/auth/drive`
+   - `https://www.googleapis.com/auth/spreadsheets`
+   - `https://www.googleapis.com/auth/documents`
+   - `https://www.googleapis.com/auth/calendar`
 3. Add your Gmail address(es) as test users
+
+These scopes permit writes and are unchanged by the CLI. Human consent is
+required during the separate OAuth onboarding flow.
 
 ## Configuration
 
@@ -515,11 +543,11 @@ The OAuth token doesn't have the required scopes.
 
 **Solution:**
 1. Check your Google Cloud OAuth consent screen has all required scopes
-2. Re-run the OAuth flow to grant new permissions
-3. Required scopes:
-   - `https://www.googleapis.com/auth/gmail.modify`
-   - `https://www.googleapis.com/auth/gmail.send`
-   - `https://www.googleapis.com/auth/userinfo.email`
+2. Review the [current requested scopes](#4-oauth-consent-screen-setup), API
+   enablement, and access to the specific resource.
+3. If the grant is missing required scopes, have a human review consent and
+   complete the separate OAuth flow again. CLI calls do not start this
+   automatically.
 
 ### Account Not Found
 

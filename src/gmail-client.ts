@@ -1,4 +1,4 @@
-import { OAuth2Client, type Credentials } from 'google-auth-library';
+import { DefaultTransporter, OAuth2Client, type Credentials, type gaxios } from 'google-auth-library';
 import { google, type calendar_v3, type docs_v1, type drive_v3, type gmail_v1, type sheets_v4 } from 'googleapis';
 import { promises as fs, createReadStream } from 'node:fs';
 import os from 'node:os';
@@ -151,6 +151,70 @@ export interface CalendarEvent {
 
 interface OAuthClientOptions {
   credentials: unknown;
+}
+
+export interface CliTransportOptions {
+  timeoutMs: number;
+}
+
+let cliTransportOptions: CliTransportOptions | undefined;
+
+/** Opt in before constructing CLI clients; leave unset for legacy MCP behavior. */
+export function configureCliTransport(options?: CliTransportOptions): void {
+  if (options && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) {
+    throw new Error('CLI request timeout must be a positive integer.');
+  }
+  cliTransportOptions = options ? { ...options } : undefined;
+}
+
+export function getCliRequestTimeout(): number | undefined {
+  return cliTransportOptions?.timeoutMs;
+}
+
+class CliTransporter extends DefaultTransporter {
+  constructor(private readonly timeoutMs: number) {
+    super();
+    this.defaults = { timeout: timeoutMs, retry: false };
+  }
+
+  override request<T>(options: gaxios.GaxiosOptions): gaxios.GaxiosPromise<T> {
+    // OAuth token/refresh methods pass retry:true explicitly, overriding defaults.
+    // Enforce the CLI policy at the shared transport boundary for every request.
+    return super.request<T>({
+      ...options,
+      timeout: this.timeoutMs,
+      retry: false,
+      retryConfig: { retry: 0, noResponseRetries: 0, shouldRetry: () => false },
+    });
+  }
+}
+
+type OAuthResponseCallback<T> = (
+  error: Error | null,
+  response?: gaxios.GaxiosResponse<T> | null,
+) => void;
+
+class CliOAuth2Client extends OAuth2Client {
+  override request<T>(options: gaxios.GaxiosOptions): gaxios.GaxiosPromise<T>;
+  override request<T>(options: gaxios.GaxiosOptions, callback: OAuthResponseCallback<T>): void;
+  override request<T>(
+    options: gaxios.GaxiosOptions,
+    callback?: OAuthResponseCallback<T>,
+  ): gaxios.GaxiosPromise<T> | void {
+    // Resolve/refresh credentials before sending via public auth APIs. The base
+    // request() can refresh and replay 401/403 responses even with retry:false,
+    // particularly for cached tokens without expiry_date. Never replay CLI calls.
+    const result = this.getRequestHeaders(options.url?.toString()).then((authHeaders) => {
+      const headers = { ...options.headers, ...authHeaders };
+      if (this.apiKey) headers['X-Goog-Api-Key'] = this.apiKey;
+      return this.transporter.request<T>({ ...options, headers });
+    });
+    if (!callback) return result;
+    void result.then(
+      (response) => callback(null, response),
+      (error) => callback(error, error.response),
+    );
+  }
 }
 
 export interface EmailAttachment {
@@ -580,6 +644,14 @@ export function createOAuthClientFromCredentials(options: OAuthClientOptions): O
   }
 
   const redirectUri = source.redirect_uris?.[0] ?? 'http://localhost';
+  if (cliTransportOptions) {
+    return new CliOAuth2Client({
+      clientId: source.client_id,
+      clientSecret: source.client_secret,
+      redirectUri,
+      transporter: new CliTransporter(cliTransportOptions.timeoutMs),
+    });
+  }
   return new OAuth2Client(source.client_id, source.client_secret, redirectUri);
 }
 
@@ -642,7 +714,7 @@ export function buildDriveSearchQuery(query: string): string {
 }
 
 export function describeDriveApiError(error: unknown, fallback: string): string {
-  const googleError = error as {
+  const googleError = (error ?? {}) as {
     code?: number;
     message?: string;
     response?: {
@@ -693,6 +765,25 @@ export function describeDriveApiError(error: unknown, fallback: string): string 
   }
 
   return message;
+}
+
+function wrapDriveApiError(error: unknown, fallback: string): Error {
+  const source = error as {
+    code?: unknown;
+    status?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  const status = source?.response?.status ?? source?.status ??
+    (typeof source?.code === 'number' ? source.code : undefined);
+  const wrapped = new Error(describeDriveApiError(error, fallback), { cause: error });
+  // Preserve classification, not provider headers, bodies, or request credentials.
+  if (typeof source?.code === 'string' || typeof source?.code === 'number') {
+    Object.assign(wrapped, { code: source.code });
+  }
+  if (typeof status === 'number') {
+    Object.assign(wrapped, { status, response: { status } });
+  }
+  return wrapped;
 }
 
 const WORKSPACE_EXPORT_MAP: Record<string, { exportMime: string; ext: string; contentType: string }> = {
@@ -838,7 +929,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       }));
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive search failed.'));
+      throw wrapDriveApiError(error, 'Drive search failed.');
     }
   }
 
@@ -847,35 +938,39 @@ export class GmailAccountClient {
     maxResults: number,
     includeBody: boolean
   ): Promise<ParsedEmail[]> {
-    const boundedMax = Math.max(1, Math.min(maxResults, 500));
+    return (await this.readEmailPage(query, maxResults, includeBody)).emails;
+  }
 
+  /** One Gmail page. Tokens are account/query-specific; no hidden auto-pagination. */
+  async readEmailPage(
+    query: string,
+    maxResults: number,
+    includeBody: boolean,
+    pageToken?: string,
+  ): Promise<{ emails: ParsedEmail[]; nextPageToken?: string; resultSizeEstimate: number }> {
+    const boundedMax = Math.max(1, Math.min(maxResults, 500));
     const listResponse = await this.gmail.users.messages.list({
       userId: 'me',
       q: query.trim() === '' ? undefined : query,
       maxResults: boundedMax,
+      pageToken,
     });
-
     const messageIds = (listResponse.data.messages ?? [])
       .map((message) => message.id)
       .filter((id): id is string => Boolean(id));
-
-    if (messageIds.length === 0) {
-      return [];
+    // Limit in-flight requests while retaining Gmail page order and a bounded page.
+    const emails: ParsedEmail[] = [];
+    for (let offset = 0; offset < messageIds.length; offset += 10) {
+      const messages = await Promise.all(messageIds.slice(offset, offset + 10).map((id) =>
+        this.gmail.users.messages.get({ userId: 'me', id, format: 'full' })
+      ));
+      emails.push(...messages.map((response) => this.parseMessage(response.data, includeBody)));
     }
-
-    const fullMessages = await Promise.all(
-      messageIds.map((messageId) =>
-        this.gmail.users.messages.get({
-          userId: 'me',
-          id: messageId,
-          format: 'full',
-        })
-      )
-    );
-
-    return fullMessages
-      .map((response) => this.parseMessage(response.data, includeBody))
-      .sort((a, b) => b.internalDate - a.internalDate);
+    return {
+      emails: emails.sort((a, b) => b.internalDate - a.internalDate),
+      nextPageToken: listResponse.data.nextPageToken ?? undefined,
+      resultSizeEstimate: listResponse.data.resultSizeEstimate ?? emails.length,
+    };
   }
 
   async listAttachments(messageId: string): Promise<AttachmentMetadata[]> {
@@ -1555,7 +1650,7 @@ export class GmailAccountClient {
         nextPageToken: response.data.nextPageToken ?? undefined,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive list failed.'));
+      throw wrapDriveApiError(error, 'Drive list failed.');
     }
   }
 
@@ -1586,7 +1681,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive file get failed.'));
+      throw wrapDriveApiError(error, 'Drive file get failed.');
     }
   }
 
@@ -1617,7 +1712,7 @@ export class GmailAccountClient {
         filename: meta.name,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive file download failed.'));
+      throw wrapDriveApiError(error, 'Drive file download failed.');
     }
   }
 
@@ -1659,7 +1754,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive upload failed.'));
+      throw wrapDriveApiError(error, 'Drive upload failed.');
     }
   }
 
@@ -1689,7 +1784,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Create folder failed.'));
+      throw wrapDriveApiError(error, 'Create folder failed.');
     }
   }
 
@@ -1724,7 +1819,7 @@ export class GmailAccountClient {
         accountEmail: this.account.email,
       };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive file update failed.'));
+      throw wrapDriveApiError(error, 'Drive file update failed.');
     }
   }
 
@@ -1737,7 +1832,7 @@ export class GmailAccountClient {
         requestBody: { trashed: true },
       });
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive trash failed.'));
+      throw wrapDriveApiError(error, 'Drive trash failed.');
     }
   }
 
@@ -1756,7 +1851,7 @@ export class GmailAccountClient {
       });
       return { permissionId: response.data.id ?? '' };
     } catch (error) {
-      throw new Error(describeDriveApiError(error, 'Drive share failed.'));
+      throw wrapDriveApiError(error, 'Drive share failed.');
     }
   }
 

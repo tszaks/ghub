@@ -1,0 +1,136 @@
+name: Verify and release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghub-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+        env:
+          GMAILMCPCONFIG_DIR: ${{ runner.temp }}/ghub-test-config
+      - name: Verify committed deployment files
+        run: |
+          status=$(git status --porcelain --untracked-files=all -- dist)
+          if [ -n "$status" ]; then
+            printf '%s\n' "$status" >&2
+            echo 'Build outputs differ from committed dist; rebuild and commit every generated file.' >&2
+            exit 1
+          fi
+
+  release:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Pack the verified package
+        run: |
+          mkdir -p "$RUNNER_TEMP/ghub-release"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/ghub-release" --json > "$RUNNER_TEMP/ghub-release/pack.json"
+      - name: Publish versioned GitHub release and package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'A stable semantic version is required.' >&2; exit 1; }
+          tag="v$version"
+          asset="ghub-$version.tgz"
+          archive="$RUNNER_TEMP/ghub-release/$asset"
+          test -f "$archive"
+          release_json="$RUNNER_TEMP/ghub-release/release.json"
+          error_file="$RUNNER_TEMP/ghub-release/error.txt"
+
+          if gh release view "$tag" --json isDraft,targetCommitish,assets > "$release_json" 2> "$error_file"; then
+            if jq -e --arg asset "$asset" '.isDraft == false and any(.assets[]; .name == $asset and .size > 0)' "$release_json" > /dev/null; then
+              echo "$tag already has its package; nothing to publish."
+              exit 0
+            fi
+            # Only resume this exact commit's incomplete release, never replace
+            # another version's package after later pushes or a changed tag.
+            target=$(jq -r '.targetCommitish' "$release_json")
+            [[ "$target" == "$GITHUB_SHA" ]] || { echo 'Incomplete release targets another commit; refusing to modify it.' >&2; exit 1; }
+          else
+            if ! grep -Eq 'release not found|HTTP 404' "$error_file"; then
+              cat "$error_file" >&2
+              exit 1
+            fi
+            # Refuse to reuse an existing tag pointing at different code.
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > "$RUNNER_TEMP/ghub-release/tag.json" 2> "$error_file"; then
+              existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')
+              [[ "$existing_sha" == "$GITHUB_SHA" ]] || { echo 'Version tag points at another commit.' >&2; exit 1; }
+            elif ! grep -q 'HTTP 404' "$error_file"; then
+              cat "$error_file" >&2
+              exit 1
+            fi
+            gh release create "$tag" --target "$GITHUB_SHA" --title "GHub $tag" --generate-notes --draft
+            gh release view "$tag" --json isDraft,targetCommitish,assets > "$release_json"
+          fi
+
+          # targetCommitish is creation metadata, not proof that an existing
+          # tag still points at this commit. Recheck before upload/publication.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > "$RUNNER_TEMP/ghub-release/tag.json" 2> "$error_file"; then
+            existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')
+            [[ "$existing_sha" == "$GITHUB_SHA" ]] || { echo 'Version tag moved to another commit; refusing to publish.' >&2; exit 1; }
+          elif grep -q 'HTTP 404' "$error_file"; then
+            # GitHub may defer tag creation until a draft is published.
+            jq -e --arg sha "$GITHUB_SHA" '.isDraft == true and .targetCommitish == $sha' "$release_json" > /dev/null || { echo 'Published release is missing its version tag.' >&2; exit 1; }
+          else
+            cat "$error_file" >&2
+            exit 1
+          fi
+
+          if jq -e --arg asset "$asset" 'any(.assets[]; .name == $asset and .size == 0)' "$release_json" > /dev/null; then
+            echo 'An incomplete zero-byte asset exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          if ! jq -e --arg asset "$asset" 'any(.assets[]; .name == $asset)' "$release_json" > /dev/null; then
+            gh release upload "$tag" "$archive"
+          fi
+          # Name/size alone cannot authenticate a resumed draft's asset. Read
+          # it back and match bytes to this run's verified npm package before
+          # publishing; never replace an unexpected artifact automatically.
+          mkdir -p "$RUNNER_TEMP/ghub-release/existing"
+          gh release download "$tag" --pattern "$asset" --dir "$RUNNER_TEMP/ghub-release/existing"
+          local_hash=$(sha256sum "$archive" | cut -d ' ' -f 1)
+          remote_hash=$(sha256sum "$RUNNER_TEMP/ghub-release/existing/$asset" | cut -d ' ' -f 1)
+          [[ "$local_hash" == "$remote_hash" ]] || { echo 'Release asset differs from the verified package; refusing to publish.' >&2; exit 1; }
+          if jq -e '.isDraft' "$release_json" > /dev/null; then
+            gh release edit "$tag" --draft=false
+          fi
+          gh release view "$tag" --json url,assets --jq '{url: .url, assets: [.assets[].name]}'
