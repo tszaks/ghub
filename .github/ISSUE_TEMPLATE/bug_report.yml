@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in ghub does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Do not paste tokens, client secrets, authorization codes, or mail content.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The tool name and arguments help most. Replace real IDs and addresses with fake ones.
+      placeholder: |
+        1. Run `ghub call ...`
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: How are you running ghub?
+      options:
+        - "MCP over stdio"
+        - "MCP over SSE"
+        - "CLI (ghub call)"
+    validations:
+      required: true
+  - type: input
+    id: ghub-version
+    attributes:
+      label: ghub version
+      placeholder: "1.7.0"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version and OS
+      placeholder: "Node 22, macOS 26"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Error output or the JSON error envelope (remove private data).
